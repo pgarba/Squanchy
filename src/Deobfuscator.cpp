@@ -62,6 +62,7 @@
 #include "llvm/Transforms/Utils/LibCallsShrinkWrap.h"
 #include "llvm/Transforms/Utils/MoveAutoInit.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
+#include <llvm/Target/TargetMachine.h>
 
 using namespace llvm;
 using namespace std;
@@ -81,6 +82,9 @@ static cl::opt<string> RuntimePath("runtime-path",
                                    cl::desc("Path to the squanchy runtime"),
                                    cl::value_desc("path"),
                                    cl::init("wasm_runtime.bc"));
+
+static cl::opt<int> OptLevel("O", cl::desc("Optimization level (Default 3)"),
+                             cl::value_desc("level"), cl::init(3));
 
 namespace squanchy {
 
@@ -149,8 +153,8 @@ bool Deobfuscator::deobfuscate() {
     for (auto &F : *M) {
       if (std::find(FunctionNames.begin(), FunctionNames.end(), F.getName()) !=
           FunctionNames.end()) {
-        if (!deobfuscateFunction(&F)) {
-          return false;
+        if (deobfuscateFunction(&F)) {
+          return true;
         }
       }
     }
@@ -192,10 +196,7 @@ void Deobfuscator::optimizeFunction(llvm::Function *F) {
 
   LoopPassManager LPM;
 
-  llvm::PipelineTuningOptions opts;
-  opts.InlinerThreshold = 0;
-
-  llvm::PassBuilder PB(nullptr, opts);
+  llvm::PassBuilder PB;
 
   PB.registerModuleAnalyses(MAM);
   PB.registerFunctionAnalyses(FAM);
@@ -203,129 +204,16 @@ void Deobfuscator::optimizeFunction(llvm::Function *F) {
   PB.registerCGSCCAnalyses(CAM);
   PB.crossRegisterProxies(LAM, FAM, CAM, MAM);
 
-  auto FPM = PB.buildFunctionSimplificationPipeline(OptimizationLevel::O3,
-                                                    ThinOrFullLTOPhase::None);
+  //auto FPM = PB.buildFunctionSimplificationPipeline(OptimizationLevel::O3,
+  //                                                  ThinOrFullLTOPhase::None);
 
-  FPM.run(*F, FAM);
+  //FPM.run(*F, FAM);
 
-  // Create the pass manager.
-  // This one corresponds to a typical -O2 optimization pipeline.
-  /*
-  ModulePassManager MPM =
-      PB.buildPerModuleDefaultPipeline(OptimizationLevel::O3);
+  auto MPM = PB.buildModuleSimplificationPipeline(OptimizationLevel::O3, ThinOrFullLTOPhase::None);
 
-  // Optimize the IR!
-  MPM.run(*F->getParent(), MAM);
-  */
+  MPM.run(*this->M, MAM);
 
-  FPM.addPass(EntryExitInstrumenterPass(false));
-
-  FPM.addPass(LowerExpectIntrinsicPass());
-  FPM.addPass(SimplifyCFGPass());
-  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
-  FPM.addPass(EarlyCSEPass());
-  FPM.addPass(CallSiteSplittingPass());
-
-  // buildModuleOptimizationPipeline
-  // FPM.addPass(LoopVersioningLICMPass());
-  FPM.addPass(Float2IntPass());
-
-  // Add loop passes here
-  // https://github.com/llvm/llvm-project/blob/64075837b5532108a1fe96a5b158feb7a9025694/llvm/lib/Passes/PassBuilderPipelines.cpp#L1473
-
-  FPM.addPass(InjectTLIMappings());
-
-  // https://github.com/llvm/llvm-project/blob/64075837b5532108a1fe96a5b158feb7a9025694/llvm/lib/Passes/PassBuilderPipelines.cpp#L545
-  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
-
-  FPM.addPass(EarlyCSEPass(true));
-
-  bool EnableKnowledgeRetention = false;
-  if (EnableKnowledgeRetention)
-    FPM.addPass(AssumeSimplifyPass());
-
-  bool EnableGVNHoist = true;
-  if (EnableGVNHoist)
-    FPM.addPass(GVNHoistPass());
-
-  bool EnableGVNSink = true;
-  if (EnableGVNSink) {
-    FPM.addPass(GVNSinkPass());
-    FPM.addPass(
-        SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  }
-
-  FPM.addPass(SpeculativeExecutionPass(true));
-  FPM.addPass(JumpThreadingPass());
-  FPM.addPass(CorrelatedValuePropagationPass());
-
-  FPM.addPass(
-      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-
-  // Only run instcombine once
-  InstCombineOptions ICO;
-  ICO.setMaxIterations(1);
-
-  FPM.addPass(InstCombinePass(ICO));
-  FPM.addPass(AggressiveInstCombinePass());
-
-  // Optimizes for size
-  FPM.addPass(LibCallsShrinkWrapPass());
-
-  FPM.addPass(TailCallElimPass());
-  FPM.addPass(
-      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-
-  FPM.addPass(ReassociatePass());
-
-  FPM.addPass(ConstraintEliminationPass());
-
-  // todo add LoopPasss
-  // https://github.com/llvm/llvm-project/blob/64075837b5532108a1fe96a5b158feb7a9025694/llvm/lib/Passes/PassBuilderPipelines.cpp#L627
-
-  FPM.addPass(
-      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass(ICO));
-
-  // Delete small array after loop unroll.
-  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
-
-  FPM.addPass(VectorCombinePass(true));
-
-  // Eliminate redundancies.
-  FPM.addPass(MergedLoadStoreMotionPass());
-
-  bool RunNewGVN = false;
-  if (RunNewGVN)
-    FPM.addPass(NewGVNPass());
-  else
-    FPM.addPass(GVNPass());
-
-  FPM.addPass(SCCPPass());
-  FPM.addPass(BDCEPass());
-  FPM.addPass(InstCombinePass(ICO));
-
-  // FPM.addPass(JumpThreadingPass());
-  FPM.addPass(CorrelatedValuePropagationPass());
-
-  // Finally, do an expensive DCE pass to catch all the dead code exposed by
-  // the simplifications and basic cleanup after all the simplifications.
-  FPM.addPass(ADCEPass());
-
-  FPM.addPass(DSEPass());
-
-  FPM.addPass(MoveAutoInitPass());
-
-  FPM.addPass(CoroElidePass());
-
-  FPM.addPass(SimplifyCFGPass(SimplifyCFGOptions()
-                                  .convertSwitchRangeToICmp(true)
-                                  .hoistCommonInsts(true)
-                                  .sinkCommonInsts(true)));
-  FPM.addPass(InstCombinePass(ICO));
-
-  // Run Opts
-  auto HasOpt = FPM.run(*F, FAM);
+  return;
 }
 
 bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
@@ -339,33 +227,19 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
     errs() << "[*] Deobfuscating function: " << F->getName() << "\n";
   }
 
+  // Remove optnone from function
+  if (F->hasFnAttribute(Attribute::AttrKind::OptimizeNone)) {
+    F->removeFnAttr(Attribute::AttrKind::OptimizeNone);
+  }
+
   // Set DataLayout
   RuntimeModule->setDataLayout(M->getDataLayout());
 
   // 1. Inject the runtime module
   linkRuntime();
 
-  // 2. Set always inline attribute
-  setFunctionAlwayInline("init_globals");
-  setFunctionAlwayInline("init_memories");
-  setFunctionAlwayInline("init_data_instances");
-  setFunctionAlwayInline("load_data");
-
-  setFunctionAlwayInline("i8_store");
-  setFunctionAlwayInline("i16_store");
-  setFunctionAlwayInline("i32_store");
-  setFunctionAlwayInline("i64_store");
-
-  setFunctionAlwayInline("i8_load");
-  setFunctionAlwayInline("i16_load");
-  setFunctionAlwayInline("i32_load");
-  setFunctionAlwayInline("i64_load");
-
-  // 2. Remove sideeffect asm calls (Creates cleaner code)
-  removeCallASMSideEffects("i8_load");
-  removeCallASMSideEffects("i16_load");
-  removeCallASMSideEffects("i32_load");
-  removeCallASMSideEffects("i64_load");
+  // Set Helper functions to always inline
+  setFunctionsAlwayInline();
 
   // 3. Call Init functions
   auto &Entry = F->getEntryBlock();
@@ -377,8 +251,15 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   // Todo: Get the struct type dynamically without the hardcoded name
   StructType *ST =
       StructType::getTypeByName(M->getContext(), "struct.w2c_0x24add0x2Ewasm");
-  auto w2cInstance =
-      new AllocaInst(ST, 0, "w2cInstance", &F->getEntryBlock().front());
+
+  AllocaInst *w2cInstance = nullptr;
+  if (ST) {
+    w2cInstance =
+        new AllocaInst(ST, 0, "w2cInstance", &F->getEntryBlock().front());
+  } else {
+    // Size of struct is: 80 bytes 
+    w2cInstance = new AllocaInst(Type::getInt8Ty(Context), 0, ConstantInt::getIntegerValue(Type::getInt32Ty(Context), APInt(80,32)),"w2cInstance", &F->getEntryBlock().front());
+  }
 
   auto init_globals = M->getFunction("init_globals");
   auto init_memories = M->getFunction("init_memories");
@@ -394,11 +275,12 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   // Replace all uses of Arg0 with w2cInstance
   Arg0->replaceAllUsesWith(w2cInstance);
 
-  // 4. Store modification to global variables
+  // 4. Store modification to global variables, if any
   // Todo: Implement this
 
   // 5. Inline and Optimize the function
   inlineFunctions(F);
+  removeCallASMSideEffects(F);
   optimizeFunction(F);
 
   // 6. Write the output file
@@ -467,6 +349,48 @@ void Deobfuscator::setFunctionAlwayInline(std::string FunctionName) {
   }
 
   setFunctionAlwayInline(F);
+}
+
+void Deobfuscator::setFunctionsAlwayInline() {
+   // 2. Set always inline attribute
+  setFunctionAlwayInline("init_globals");
+  setFunctionAlwayInline("init_memories");
+  setFunctionAlwayInline("init_data_instances");
+  setFunctionAlwayInline("load_data");
+
+  // Older wasm2c 
+  setFunctionAlwayInline("i8_store");
+  setFunctionAlwayInline("i16_store");
+  setFunctionAlwayInline("i32_store");
+  setFunctionAlwayInline("i64_store");
+
+  setFunctionAlwayInline("i8_load");
+  setFunctionAlwayInline("i16_load");
+  setFunctionAlwayInline("i32_load");
+  setFunctionAlwayInline("i64_load");
+
+  // Newer wasm2c
+  setFunctionAlwayInline("i8_store_default32");
+  setFunctionAlwayInline("i16_store_default32");
+  setFunctionAlwayInline("i32_store_default32");
+  setFunctionAlwayInline("i64_store_default32");
+
+  setFunctionAlwayInline("i8_load_default32");
+  setFunctionAlwayInline("i16_load_default32");
+  setFunctionAlwayInline("i32_load_default32");
+  setFunctionAlwayInline("i64_load_default32");
+
+  setFunctionAlwayInline("i8_store_unchecked");
+  setFunctionAlwayInline("i16_store_unchecked");
+  setFunctionAlwayInline("i32_store_unchecked");
+  setFunctionAlwayInline("i64_store_unchecked");
+
+  setFunctionAlwayInline("i8_load_unchecked");
+  setFunctionAlwayInline("i18_load_unchecked");
+  setFunctionAlwayInline("i32_load_unchecked");
+  setFunctionAlwayInline("i64_load_unchecked");
+
+  setFunctionAlwayInline("add_overflow");
 }
 
 void Deobfuscator::inlineFunctions(Function *F) {

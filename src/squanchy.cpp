@@ -2,6 +2,8 @@
 #include <string>
 
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/InitLLVM.h>
+
 
 #include "Deobfuscator.h"
 
@@ -14,10 +16,9 @@ static cl::opt<string>
 static cl::opt<string> OutputFilename("o", cl::desc("Output llvm ir filename"),
                                       cl::value_desc("filename"));
 
-static cl::opt<int> OptLevel("O", cl::desc("Optimization level (Default 3)"),
-                             cl::value_desc("level"), cl::init(3));
-
 int main(int argc, char **argv) {
+  InitLLVM X(argc, argv);
+
   cl::ParseCommandLineOptions(argc, argv, "squanchy wasm deobfuscator\n");
 
   // Deobfuscate the input file

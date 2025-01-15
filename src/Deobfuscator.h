@@ -61,6 +61,7 @@ private:
 
   void setFunctionAlwayInline(llvm::Function *F);
   void setFunctionAlwayInline(std::string FunctionName);
+  void setFunctionsAlwayInline();
 
   void writeOutput();
 };
