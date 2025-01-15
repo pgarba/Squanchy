@@ -31,7 +31,6 @@ public:
   std::unique_ptr<llvm::Module> parse(const std::string &filename);
 
 private:
-  static llvm::LLVMContext Context;
   llvm::TargetLibraryInfoImpl *TLII;
   std::unique_ptr<llvm::TargetLibraryInfo> TLI;
 
@@ -62,6 +61,8 @@ private:
   void setFunctionAlwayInline(llvm::Function *F);
   void setFunctionAlwayInline(std::string FunctionName);
   void setFunctionsAlwayInline();
+
+  void injectInitializer(llvm::Function *F);
 
   void writeOutput();
 };

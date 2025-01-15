@@ -3,7 +3,7 @@
 
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/InitLLVM.h>
-
+#include <llvm/Support/TargetSelect.h>
 
 #include "Deobfuscator.h"
 
@@ -18,6 +18,12 @@ static cl::opt<string> OutputFilename("o", cl::desc("Output llvm ir filename"),
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
+
+  // Some JIT Things
+  InitializeAllTargets();
+  InitializeAllTargetMCs();
+  InitializeAllAsmPrinters();
+  InitializeAllAsmParsers();
 
   cl::ParseCommandLineOptions(argc, argv, "squanchy wasm deobfuscator\n");
 

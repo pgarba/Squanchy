@@ -4,6 +4,7 @@ project(squanchy)
 find_package(LLVM REQUIRED CONFIG)
 
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "LLVM_TOOLS ${LLVM_TOOLS_BINARY_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
 # Set your project compile flags.
