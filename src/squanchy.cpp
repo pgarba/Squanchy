@@ -10,11 +10,15 @@
 using namespace llvm;
 using namespace std;
 
-static cl::opt<string>
-    InputFilename(cl::Positional, cl::desc("Input llvm ir file"), cl::Required);
+cl::OptionCategory SquanchyCat("Squanchy Options");
+
+static cl::opt<string> InputFilename(cl::Positional,
+                                     cl::desc("Input llvm ir file"),
+                                     cl::Required, cl::cat(SquanchyCat));
 
 static cl::opt<string> OutputFilename("o", cl::desc("Output llvm ir filename"),
-                                      cl::value_desc("filename"));
+                                      cl::value_desc("filename"),
+                                      cl::cat(SquanchyCat));
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
@@ -26,6 +30,7 @@ int main(int argc, char **argv) {
   InitializeAllAsmParsers();
 
   cl::ParseCommandLineOptions(argc, argv, "squanchy wasm deobfuscator\n");
+  cl::HideUnrelatedOptions(SquanchyCat);
 
   // Deobfuscate the input file
   squanchy::Deobfuscator Deobfuscator(InputFilename, OutputFilename);

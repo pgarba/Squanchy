@@ -32,6 +32,8 @@
 
 #include <llvm/Target/TargetMachine.h>
 
+#include "LLVMExtract.h"
+
 using namespace llvm;
 using namespace std;
 
@@ -161,7 +163,7 @@ void Deobfuscator::linkRuntime() {
   L.linkInModule(std::move(RuntimeModule), Linker::Flags::OverrideFromSrc);
 }
 
-void Deobfuscator::optimizeFunction(llvm::Function *F) {
+void Deobfuscator::optimizeFunction(llvm::Function *F, bool runModulePasses) {
   // Create a new function pass manager
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
@@ -177,8 +179,14 @@ void Deobfuscator::optimizeFunction(llvm::Function *F) {
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  auto MPM = PB.buildPerModuleDefaultPipeline(OptimizationLevel::O3);
-  MPM.run(*this->M, MAM);
+  auto FPM = PB.buildFunctionSimplificationPipeline(OptimizationLevel::O3,
+                                                    ThinOrFullLTOPhase::None);
+  FPM.run(*F, FAM);
+
+  if (runModulePasses) {
+    auto MPM = PB.buildPerModuleDefaultPipeline(OptimizationLevel::O3);
+    MPM.run(*this->M, MAM);
+  }
 
   return;
 }
@@ -220,10 +228,20 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   // 6. Remove asm calls with sideeffect
   removeCallASMSideEffects(F);
 
+  // Set function noinline
+  F->addFnAttr(Attribute::NoInline);
+
   // 7. Optimize the functions
   optimizeFunction(F);
 
-  // 8. Write the output file
+  // 8. Extract the function and globals
+  LLVMExtract(M.get(), {F->getName().str()}, {"data_segment_data.*"}, false);
+
+  // 9. Optimize the functions with module passes enabled (folds the code
+  // further)
+  optimizeFunction(F, true);
+
+  // 9. Write the output file
   writeOutput();
 
   return true;
@@ -260,32 +278,27 @@ void Deobfuscator::injectInitializer(llvm::Function *F) {
     // Allocate a real struct type
     w2cInstance =
         new AllocaInst(ST, 0, "w2cInstance", &F->getEntryBlock().front());
-  } else {
-    // Size of struct is: 80 bytes
-    const int StructSize = 80;
-
-    w2cInstance =
-        new AllocaInst(Type::getInt8Ty(Context), 0,
-                       ConstantInt::getIntegerValue(Type::getInt32Ty(Context),
-                                                    APInt(StructSize, 32)),
-                       "w2cInstance", &F->getEntryBlock().front());
-
-    errs() << "[!] Could not find struct type. Allocating fixed size of "
-           << StructSize << " Bytes instead\n";
   }
 
-  // Call the init functions
-  // todo: Maybe just call wasm2c_squanchy_instantiate
-  auto init_globals = M->getFunction("init_globals");
-  auto init_memories = M->getFunction("init_memories");
-  auto init_data_instances = M->getFunction("init_data_instances");
-  auto load_data = M->getFunction("load_data");
+  if (!ST)
+    report_fatal_error("Could not find the struct type");
+
+  // Allocate an ptr for struct w2c_env
+  const int w2c_envSize = 80;
+  auto w2c_env =
+      new AllocaInst(Type::getInt8Ty(Context), 0,
+                     ConstantInt::getIntegerValue(Type::getInt32Ty(Context),
+                                                  APInt(w2c_envSize, 32)),
+                     "w2c_env", &F->getEntryBlock().front());
+
+  // Call wasm2c_squanchy_instantiate(w2c_squanchy* instance, struct
+  // w2c_env* w2c_env_instance)
+  auto wasm2c_squanchy_instantiate =
+      M->getFunction("wasm2c_squanchy_instantiate");
 
   IRBuilder<> Builder(&FirstInst);
-  auto call_init_globals = Builder.CreateCall(init_globals, w2cInstance);
-  auto call_init_memories = Builder.CreateCall(init_memories, w2cInstance);
-  auto call_init_data_instances =
-      Builder.CreateCall(init_data_instances, w2cInstance);
+  auto call_wasm2c_squanchy_instantiate =
+      Builder.CreateCall(wasm2c_squanchy_instantiate, {w2cInstance, w2c_env});
 
   // Replace all uses of Arg0 with w2cInstance
   Arg0->replaceAllUsesWith(w2cInstance);
@@ -338,9 +351,18 @@ void Deobfuscator::setFunctionAlwayInline(std::string FunctionName) {
 }
 
 void Deobfuscator::setFunctionsAlwayInline() {
-  // 2. Set always inline attribute
+  // wasm2c_squanchy_instantiate function
+  string FunctionName = "wasm2c_" + ModuleName + "_instantiate";
+  setFunctionAlwayInline(FunctionName);
+
+  // Set always inline attribute
+  setFunctionAlwayInline("wasm_rt_is_initialized");
+  setFunctionAlwayInline("init_instance_import");
   setFunctionAlwayInline("init_globals");
+  setFunctionAlwayInline("init_tables");
+  setFunctionAlwayInline("funcref_table_init");
   setFunctionAlwayInline("init_memories");
+  setFunctionAlwayInline("init_elem_instances");
   setFunctionAlwayInline("init_data_instances");
   setFunctionAlwayInline("load_data");
 

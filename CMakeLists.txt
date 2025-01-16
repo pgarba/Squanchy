@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10.0)
+cmake_minimum_required(VERSION 3.16.0)
 project(squanchy)
 
 find_package(LLVM REQUIRED CONFIG)
@@ -37,10 +37,16 @@ list(APPEND PROJECT_DEFINITIONS ${LLVM_DEFINITIONS})
 list(APPEND PROJECT_INCLUDEDIRECTORIES ${LLVM_INCLUDE_DIRS})
 
 include_directories(${LLVM_INCLUDE_DIRS})
-add_definitions(${LLVM_DEFINITIONS})
+add_definitions(${LLVM_DEFINITIONS} 
+)
 
 # Now build our tools
-add_executable(squanchy src/squanchy.cpp src/Deobfuscator.cpp)
+add_executable(squanchy 
+src/squanchy.cpp 
+src/Deobfuscator.cpp 
+src/LLVMHelpers.cpp
+src/LLVMExtract.cpp
+)
 
 # Find the libraries that correspond to the LLVM components
 # that we wish to use
