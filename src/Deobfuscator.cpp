@@ -263,13 +263,64 @@ void Deobfuscator::writeOutput() {
   M->print(OS, nullptr);
 }
 
+void Deobfuscator::handle_funcref_table_init(llvm::Function *F) {
+  // Handle funcref_table_init
+  // Check if there is any usage for funcref_table_init
+  // Todo: See how to initialize the funcref_table properly
+  auto funcref_table_init = M->getFunction("funcref_table_init");
+  if (!funcref_table_init) {
+    return;
+  }
+
+  // get a call that comes from init_tables
+  CallInst *call_funcref_table_init = nullptr;
+  int count = 0;
+
+  for (auto U : funcref_table_init->users()) {
+    if (auto *CI = dyn_cast<CallInst>(U)) {
+      call_funcref_table_init = CI;
+      count++;
+    }
+  }
+
+  if (!call_funcref_table_init || count > 1) {
+    errs() << "[!] Could not find the call to funcref_table_init uses( "
+              "count: "
+           << count << ")\n";
+    return;
+  }
+
+  // Get the number of elements in the table
+  auto *tableSize = call_funcref_table_init->getArgOperand(5);
+
+  // Get create_table function
+  auto create_table = M->getFunction("create_table");
+  if (!create_table) {
+    errs() << "[!] Could not find the create_table function\n";
+    return;
+  }
+
+  // Call create_table
+  auto CT =
+      CallInst::Create(create_table, {tableSize}, "", call_funcref_table_init);
+
+  // Set table as call argument
+  call_funcref_table_init->setArgOperand(0, CT);
+}
+
 void Deobfuscator::injectInitializer(llvm::Function *F) {
+
+  // Handle funcref_table_init
+  handle_funcref_table_init(F);
+
+  // Init the env for the function properly
   auto &Entry = F->getEntryBlock();
   auto &FirstInst = Entry.front();
   auto Arg0 = F->getArg(0);
 
   // Allocate new ST
   // Get wasm2c struct used for the instance
+  // w2c_squanchy
   string StructName = "struct.w2c_" + ModuleName;
   StructType *ST = StructType::getTypeByName(M->getContext(), StructName);
 

@@ -50,4 +50,65 @@ wasm_rt_free_memory(wasm_rt_memory_t *memory) {
 */
 bool __attribute__((always_inline)) wasm_rt_is_initialized() { return true; }
 
+/*
+  Implement some helpers for wasm env
+*/
+const uint32_t memoryBase = 0;
+const uint32_t tableBase = 1;
+
+// Memory
+extern "C" uint8_t table[0];
+extern "C" uint8_t memory[0];
+extern "C" uint8_t DYNAMICTOP_PTR[0];
+extern "C" uint8_t STACKTOP[0];
+extern "C" uint8_t STACK_MAX[0];
+
+extern "C" uint32_t *__attribute__((always_inline))
+w2c_env_DYNAMICTOP_PTR(struct w2c_env *) {
+  return (uint32_t *)DYNAMICTOP_PTR;
+}
+
+extern "C" uint32_t *__attribute__((always_inline))
+w2c_env_STACKTOP(struct w2c_env *) {
+  return (uint32_t *)STACKTOP;
+}
+
+extern "C" uint32_t *__attribute__((always_inline))
+w2c_env_STACK_MAX(struct w2c_env *) {
+  return (uint32_t *)STACK_MAX;
+}
+
+extern "C" wasm_rt_memory_t *__attribute__((always_inline))
+w2c_env_memory(struct w2c_env *) {
+  return (wasm_rt_memory_t *)memory;
+}
+
+extern "C" uint32_t *__attribute__((always_inline))
+w2c_env_memoryBase(struct w2c_env *) {
+  return (uint32_t *)&memory[memoryBase];
+}
+
+// Todo: allocate this dynamically by parsing the params from funcref_table_init
+// call and create an alloca
+extern "C" wasm_rt_funcref_table_t *__attribute__((always_inline))
+w2c_env_table(struct w2c_env *) {
+  return (wasm_rt_funcref_table_t *)table;
+}
+
+extern "C" uint32_t *__attribute__((always_inline))
+w2c_env_tableBase(struct w2c_env *) {
+  return (uint32_t *)&table[tableBase];
+}
+
+extern "C" wasm_rt_funcref_table_t *__attribute__((always_inline))
+create_table(uint32_t elements) {
+  wasm_rt_funcref_table_t *table =
+      (wasm_rt_funcref_table_t *)malloc(sizeof(wasm_rt_funcref_table_t));
+  table->data =
+      (wasm_rt_funcref_t *)calloc(elements, sizeof(wasm_rt_funcref_t));
+  table->size = elements;
+  table->max_size = elements;
+
+  return table;
+}
 }; // extern "C"
