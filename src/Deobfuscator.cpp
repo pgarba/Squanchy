@@ -307,15 +307,13 @@ void Deobfuscator::handle_funcref_table_init(llvm::Function *F) {
   auto CT =
       CallInst::Create(create_table, {tableSize}, "", call_funcref_table_init);
 
+  CT->dump();
+
   // Set table as call argument
-  call_funcref_table_init->setArgOperand(0, CT);
+  // call_funcref_table_init->setArgOperand(0, CT);
 }
 
 void Deobfuscator::injectInitializer(llvm::Function *F) {
-
-  // Handle funcref_table_init
-  handle_funcref_table_init(F);
-
   // Init the env for the function properly
   auto &Entry = F->getEntryBlock();
   auto &FirstInst = Entry.front();

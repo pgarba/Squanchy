@@ -51,6 +51,30 @@ wasm_rt_free_memory(wasm_rt_memory_t *memory) {
 bool __attribute__((always_inline)) wasm_rt_is_initialized() { return true; }
 
 /*
+    Allocate funcref table for the wasm runtime.
+*/
+void __attribute__((always_inline))
+wasm_rt_allocate_funcref_table(wasm_rt_funcref_table_t *table,
+                               uint32_t elements, uint32_t max_elements) {
+  table->size = elements;
+  table->max_size = max_elements;
+  table->data =
+      (wasm_rt_funcref_t *)calloc(table->size, sizeof(wasm_rt_funcref_t));
+}
+
+/*
+    Allocate externref table for the wasm runtime.
+*/
+void __attribute__((always_inline))
+wasm_rt_allocate_externref_table(wasm_rt_externref_table_t *table,
+                                 uint32_t elements, uint32_t max_elements) {
+  table->size = elements;
+  table->max_size = max_elements;
+  table->data =
+      (wasm_rt_externref_t *)calloc(table->size, sizeof(wasm_rt_externref_t));
+}
+
+/*
   Implement some helpers for wasm env
 */
 const uint32_t memoryBase = 0;
