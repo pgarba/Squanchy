@@ -63,6 +63,9 @@ extern "C" uint8_t DYNAMICTOP_PTR[0];
 extern "C" uint8_t STACKTOP[0];
 extern "C" uint8_t STACK_MAX[0];
 
+// Firefox
+// TOTAL_STACK: 5242880
+
 extern "C" uint32_t *__attribute__((always_inline))
 w2c_env_DYNAMICTOP_PTR(struct w2c_env *) {
   return (uint32_t *)DYNAMICTOP_PTR;

@@ -1,5 +1,6 @@
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace llvm {
 class DominatorTree;
@@ -58,9 +59,11 @@ private:
   void removeCallASMSideEffects(llvm::Function *F);
   void removeCallASMSideEffects(std::string FunctionName);
 
+  std::vector<std::string> AIFunctionNames;
   void setFunctionAlwayInline(llvm::Function *F);
   void setFunctionAlwayInline(std::string FunctionName);
   void setFunctionsAlwayInline();
+  void removeAlwayInlineAttribute();
 
   void injectInitializer(llvm::Function *F);
   void handle_funcref_table_init(llvm::Function *F);

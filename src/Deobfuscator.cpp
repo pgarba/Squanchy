@@ -241,7 +241,10 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   // further)
   optimizeFunction(F, true);
 
-  // 9. Write the output file
+  // 10. Remove the noinline attribute
+  F->removeFnAttr(Attribute::NoInline);
+
+  // 11. Write the output file
   writeOutput();
 
   return true;
@@ -379,9 +382,25 @@ void Deobfuscator::removeCallASMSideEffects(std::string FunctionName) {
   removeCallASMSideEffects(F);
 }
 
+void Deobfuscator::removeAlwayInlineAttribute() {
+  for (auto FName : AIFunctionNames) {
+    auto F = M->getFunction(FName);
+    if (!F) {
+      continue;
+    }
+
+    F->removeFnAttr(Attribute::AlwaysInline);
+  }
+}
+
 void Deobfuscator::setFunctionAlwayInline(llvm::Function *F) {
   if (!F)
     return;
+
+  // Check if function is already always inline
+  if (F->hasFnAttribute(Attribute::AlwaysInline)) {
+    return;
+  }
 
   F->addFnAttr(Attribute::AlwaysInline);
 
@@ -390,6 +409,8 @@ void Deobfuscator::setFunctionAlwayInline(llvm::Function *F) {
       CI->addFnAttr(Attribute::AlwaysInline);
     }
   }
+
+  AIFunctionNames.push_back(F->getName().str());
 }
 
 void Deobfuscator::setFunctionAlwayInline(std::string FunctionName) {
