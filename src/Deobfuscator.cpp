@@ -37,32 +37,36 @@
 using namespace llvm;
 using namespace std;
 
+extern cl::OptionCategory SquanchyCat;
+
 // Command line options
 static cl::opt<bool> KeepWASMRuntime("keep-wasm-runtime",
                                      cl::desc("Keep WASM runtime functions"),
-                                     cl::init(false));
+                                     cl::init(false), cl::cat(SquanchyCat));
 
 static cl::list<string>
     FunctionNames("f", cl::desc("Function names to deobfuscate (default all)"),
-                  cl::value_desc("function name"));
+                  cl::value_desc("function name"), cl::cat(SquanchyCat));
 
-static cl::opt<bool> Verbose("v", cl::desc("Print verbose output"));
+static cl::opt<bool> Verbose("v", cl::desc("Print verbose output"),
+                             cl::cat(SquanchyCat));
 
 static cl::opt<string> RuntimePath("runtime-path",
                                    cl::desc("Path to the squanchy runtime"),
                                    cl::value_desc("path"),
-                                   cl::init("wasm_runtime.bc"));
+                                   cl::init("wasm_runtime.bc"),
+                                   cl::cat(SquanchyCat));
 
 static cl::opt<int> OptLevel("O", cl::desc("Optimization level (Default 3)"),
-                             cl::value_desc("level"), cl::init(3));
+                             cl::value_desc("level"), cl::init(3),
+                             cl::cat(SquanchyCat));
 
 static cl::opt<string> ModuleName("module-name",
                                   cl::desc("The module-name used in wasm2c"),
                                   cl::value_desc("module-name"),
-                                  cl::init("squanchy"));
+                                  cl::init("squanchy"), cl::cat(SquanchyCat));
 
 namespace squanchy {
-
 // Needs to be global otherwise we will see a crash during optimization
 llvm::LLVMContext Context;
 
