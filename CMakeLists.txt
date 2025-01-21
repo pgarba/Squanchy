@@ -42,7 +42,7 @@ add_definitions(${LLVM_DEFINITIONS}
 
 # Now build our tools
 add_executable(squanchy 
-src/squanchy.cpp 
+src/Squanchy.cpp 
 src/Deobfuscator.cpp 
 src/LLVMHelpers.cpp
 src/LLVMExtract.cpp
@@ -58,7 +58,7 @@ target_link_libraries(squanchy ${LLVM_LIBS})
 # Custom buld step to compule the runtime
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/runtime.bc
-    COMMAND clang++-18 -c -emit-llvm -o ${CMAKE_CURRENT_BINARY_DIR}/wasm_runtime.bc ${CMAKE_CURRENT_SOURCE_DIR}/runtime/wasm_runtime.cpp
+    COMMAND clang++ -c -emit-llvm -o ${CMAKE_CURRENT_BINARY_DIR}/wasm_runtime.bc ${CMAKE_CURRENT_SOURCE_DIR}/runtime/wasm_runtime.cpp
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/runtime/wasm_runtime.cpp
     COMMENT "Building wasm_runtime.bc"
 )
