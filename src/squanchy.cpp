@@ -29,8 +29,8 @@ int main(int argc, char **argv) {
   InitializeAllAsmPrinters();
   InitializeAllAsmParsers();
 
-  cl::ParseCommandLineOptions(argc, argv, "squanchy wasm deobfuscator\n");
   cl::HideUnrelatedOptions(SquanchyCat);
+  cl::ParseCommandLineOptions(argc, argv, "squanchy wasm deobfuscator\n");
 
   // Deobfuscate the input file
   squanchy::Deobfuscator Deobfuscator(InputFilename, OutputFilename);

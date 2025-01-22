@@ -28,8 +28,8 @@ struct w2c_env;
 struct w2c_wasi__snapshot__preview1;
 
 typedef struct w2c_squanchy {
-  struct w2c_env* w2c_env_instance;
-  struct w2c_wasi__snapshot__preview1* w2c_wasi__snapshot__preview1_instance;
+  struct w2c_env *w2c_env_instance;
+  struct w2c_wasi__snapshot__preview1 *w2c_wasi__snapshot__preview1_instance;
   u32 w2c_g0;
   u32 w2c_g1;
   u32 w2c_g2;
@@ -38,63 +38,69 @@ typedef struct w2c_squanchy {
   wasm_rt_funcref_table_t w2c_0x5F_indirect_function_table;
 } w2c_squanchy;
 
-void wasm2c_squanchy_instantiate(w2c_squanchy*, struct w2c_env*, struct w2c_wasi__snapshot__preview1*);
-void wasm2c_squanchy_free(w2c_squanchy*);
-wasm_rt_func_type_t wasm2c_squanchy_get_func_type(uint32_t param_count, uint32_t result_count, ...);
+void wasm2c_squanchy_instantiate(w2c_squanchy *, struct w2c_env *,
+                                 struct w2c_wasi__snapshot__preview1 *);
+void wasm2c_squanchy_free(w2c_squanchy *);
+wasm_rt_func_type_t wasm2c_squanchy_get_func_type(uint32_t param_count,
+                                                  uint32_t result_count, ...);
 
 /* import: 'env' '_emscripten_memcpy_js' */
-void w2c_env_0x5Femscripten_memcpy_js(struct w2c_env*, u32, u32, u32);
+void w2c_env_0x5Femscripten_memcpy_js(struct w2c_env *, u32, u32, u32);
 
 /* import: 'wasi_snapshot_preview1' 'fd_write' */
-u32 w2c_wasi__snapshot__preview1_fd_write(struct w2c_wasi__snapshot__preview1*, u32, u32, u32, u32);
+u32 w2c_wasi__snapshot__preview1_fd_write(struct w2c_wasi__snapshot__preview1 *,
+                                          u32, u32, u32, u32);
 
 /* export: 'memory' */
-wasm_rt_memory_t* w2c_squanchy_memory(w2c_squanchy* instance);
+wasm_rt_memory_t *w2c_squanchy_memory(w2c_squanchy *instance);
 
 /* export: '__wasm_call_ctors' */
-void w2c_squanchy_0x5F_wasm_call_ctors(w2c_squanchy*);
+void w2c_squanchy_0x5F_wasm_call_ctors(w2c_squanchy *);
 
 /* export: 'calc' */
-u32 w2c_squanchy_calc(w2c_squanchy*, u32);
+u32 w2c_squanchy_calc(w2c_squanchy *, u32);
 
 /* export: 'main' */
-u32 w2c_squanchy_main(w2c_squanchy*, u32, u32);
+u32 w2c_squanchy_main(w2c_squanchy *, u32, u32);
+
+u32 w2c_squanchy_calc_0(w2c_squanchy *, u32);
 
 /* export: 'fflush' */
-u32 w2c_squanchy_fflush(w2c_squanchy*, u32);
+u32 w2c_squanchy_fflush(w2c_squanchy *, u32);
 
 /* export: '__indirect_function_table' */
-wasm_rt_funcref_table_t* w2c_squanchy_0x5F_indirect_function_table(w2c_squanchy* instance);
+wasm_rt_funcref_table_t *
+w2c_squanchy_0x5F_indirect_function_table(w2c_squanchy *instance);
 
 /* export: 'strerror' */
-u32 w2c_squanchy_strerror(w2c_squanchy*, u32);
+u32 w2c_squanchy_strerror(w2c_squanchy *, u32);
 
 /* export: 'emscripten_stack_init' */
-void w2c_squanchy_emscripten_stack_init(w2c_squanchy*);
+void w2c_squanchy_emscripten_stack_init(w2c_squanchy *);
 
 /* export: 'emscripten_stack_get_free' */
-u32 w2c_squanchy_emscripten_stack_get_free(w2c_squanchy*);
+u32 w2c_squanchy_emscripten_stack_get_free(w2c_squanchy *);
 
 /* export: 'emscripten_stack_get_base' */
-u32 w2c_squanchy_emscripten_stack_get_base(w2c_squanchy*);
+u32 w2c_squanchy_emscripten_stack_get_base(w2c_squanchy *);
 
 /* export: 'emscripten_stack_get_end' */
-u32 w2c_squanchy_emscripten_stack_get_end(w2c_squanchy*);
+u32 w2c_squanchy_emscripten_stack_get_end(w2c_squanchy *);
 
 /* export: '_emscripten_stack_restore' */
-void w2c_squanchy_0x5Femscripten_stack_restore(w2c_squanchy*, u32);
+void w2c_squanchy_0x5Femscripten_stack_restore(w2c_squanchy *, u32);
 
 /* export: '_emscripten_stack_alloc' */
-u32 w2c_squanchy_0x5Femscripten_stack_alloc(w2c_squanchy*, u32);
+u32 w2c_squanchy_0x5Femscripten_stack_alloc(w2c_squanchy *, u32);
 
 /* export: 'emscripten_stack_get_current' */
-u32 w2c_squanchy_emscripten_stack_get_current(w2c_squanchy*);
+u32 w2c_squanchy_emscripten_stack_get_current(w2c_squanchy *);
 
 /* export: 'dynCall_jiji' */
-u32 w2c_squanchy_dynCall_jiji(w2c_squanchy*, u32, u32, u32, u32, u32);
+u32 w2c_squanchy_dynCall_jiji(w2c_squanchy *, u32, u32, u32, u32, u32);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* OBF_W2C_H_GENERATED_ */
+#endif /* OBF_W2C_H_GENERATED_ */
