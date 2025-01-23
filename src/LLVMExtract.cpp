@@ -41,15 +41,16 @@
 
 using namespace llvm;
 
-cl::OptionCategory ExtractCat("llvm-extract Options");
+// cl::OptionCategory ExtractCat("llvm-extract Options");
+extern cl::OptionCategory SquanchyCat;
 
 static cl::opt<bool> DeleteFn("delete",
                               cl::desc("Delete specified Globals from Module"),
-                              cl::cat(ExtractCat));
+                              cl::cat(SquanchyCat));
 
 static cl::opt<bool> KeepConstInit("keep-const-init",
                                    cl::desc("Keep initializers of constants"),
-                                   cl::cat(ExtractCat));
+                                   cl::cat(SquanchyCat));
 
 // ExtractRegExpFuncs - The functions, matched via regular expression, to
 // extract from the module.
@@ -57,7 +58,7 @@ static cl::list<std::string>
     ExtractRegExpFuncs("rfunc",
                        cl::desc("Specify function(s) to extract using a "
                                 "regular expression"),
-                       cl::value_desc("rfunction"), cl::cat(ExtractCat));
+                       cl::value_desc("rfunction"), cl::cat(SquanchyCat));
 
 // ExtractBlocks - The blocks to extract from the module.
 static cl::list<std::string> ExtractBlocks(
@@ -71,12 +72,12 @@ static cl::list<std::string> ExtractBlocks(
         "  --bb=f:bb1;bb2 will extract one function with both bb1 and bb2;\n"
         "  --bb=f:bb1 --bb=f:bb2 will extract two functions, one with bb1, one "
         "with bb2."),
-    cl::value_desc("function:bb1[;bb2...]"), cl::cat(ExtractCat));
+    cl::value_desc("function:bb1[;bb2...]"), cl::cat(SquanchyCat));
 
 // ExtractAlias - The alias to extract from the module.
 static cl::list<std::string>
     ExtractAliases("alias", cl::desc("Specify alias to extract"),
-                   cl::value_desc("alias"), cl::cat(ExtractCat));
+                   cl::value_desc("alias"), cl::cat(SquanchyCat));
 
 // ExtractRegExpAliases - The aliases, matched via regular expression, to
 // extract from the module.
@@ -84,22 +85,22 @@ static cl::list<std::string>
     ExtractRegExpAliases("ralias",
                          cl::desc("Specify alias(es) to extract using a "
                                   "regular expression"),
-                         cl::value_desc("ralias"), cl::cat(ExtractCat));
+                         cl::value_desc("ralias"), cl::cat(SquanchyCat));
 
 // ExtractGlobals - The globals to extract from the module.
 static cl::list<std::string>
     ExtractGlobals("glob", cl::desc("Specify global to extract"),
-                   cl::value_desc("global"), cl::cat(ExtractCat));
+                   cl::value_desc("global"), cl::cat(SquanchyCat));
 
 static cl::opt<bool> PreserveBitcodeUseListOrder(
     "preserve-bc-uselistorder",
     cl::desc("Preserve use-list order when writing LLVM bitcode."),
-    cl::init(true), cl::Hidden, cl::cat(ExtractCat));
+    cl::init(true), cl::Hidden, cl::cat(SquanchyCat));
 
 static cl::opt<bool> PreserveAssemblyUseListOrder(
     "preserve-ll-uselistorder",
     cl::desc("Preserve use-list order when writing LLVM assembly."),
-    cl::init(false), cl::Hidden, cl::cat(ExtractCat));
+    cl::init(false), cl::Hidden, cl::cat(SquanchyCat));
 
 int LLVMExtract(Module *M, std::vector<std::string> ExtractFuncs,
                 std::vector<std::string> ExtractRegExpGlobals, bool Recursive) {
@@ -253,6 +254,9 @@ int LLVMExtract(Module *M, std::vector<std::string> ExtractFuncs,
           Function *CF = CB->getCalledFunction();
           if (!CF)
             continue;
+          if (CF->getName() == "w2c_squanchy_f20") {
+            CF->dump();
+          }
           if (CF->isDeclaration() || GVs.count(CF))
             continue;
           GVs.insert(CF);

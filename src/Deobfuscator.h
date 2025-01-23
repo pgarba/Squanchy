@@ -45,6 +45,7 @@ private:
   int InstructionCountBefore = 0;
 
   int getInstructionCount(llvm::Module *M);
+  int getInstructionCount(llvm::Function *F);
 
   bool deobfuscateFunction(llvm::Function *F);
 
