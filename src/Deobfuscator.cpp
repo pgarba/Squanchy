@@ -441,15 +441,18 @@ void Deobfuscator::setFunctionsAlwayInline() {
   setFunctionAlwayInline("load_data");
 
   // Older wasm2c
-  setFunctionAlwayInline("i8_store");
-  setFunctionAlwayInline("i16_store");
-  setFunctionAlwayInline("i32_store");
-  setFunctionAlwayInline("i64_store");
+  const std::string LoadStoreFunctions[] = {
+      "i8_store",     "i16_store",    "i32_store",    "i64_store",
+      "i8_load",      "i16_load",     "i32_load",     "i64_load",
+      "i32_load8_s",  "i64_load8_s",  "i32_load8_u",  "i64_load8_u",
+      "i32_load16_s", "i64_load16_s", "i32_load16_u", "i64_load16_u",
+      "i64_load32_s", "i64_load32_u", "f32_load",     "f64_load",
+      "f32_store",    "f64_store",    "i32_store8",   "i32_store16",
+      "i64_store8",   "i64_store16",  "i64_store32"};
 
-  setFunctionAlwayInline("i8_load");
-  setFunctionAlwayInline("i16_load");
-  setFunctionAlwayInline("i32_load");
-  setFunctionAlwayInline("i64_load");
+  for (auto &FName : LoadStoreFunctions) {
+    setFunctionAlwayInline(FName);
+  }
 
   // Newer wasm2c
   setFunctionAlwayInline("i8_store_default32");
