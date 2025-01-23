@@ -45,11 +45,17 @@ static cl::opt<bool> KeepWASMRuntime("keep-wasm-runtime",
                                      cl::init(false), cl::cat(SquanchyCat));
 
 static cl::list<string>
-    FunctionNames("f", cl::desc("Function names to deobfuscate (default all)"),
-                  cl::value_desc("function name"), cl::cat(SquanchyCat));
+    FunctionNames("f", cl::desc("List of function names to deobfuscate"),
+                  cl::value_desc("function names"), cl::OneOrMore,
+                  cl::cat(SquanchyCat));
 
 static cl::opt<bool> Verbose("v", cl::desc("Print verbose output"),
                              cl::cat(SquanchyCat));
+
+static cl::opt<bool>
+    PrintFunctions("list-functions",
+                   cl::desc("List all functions in the module"),
+                   cl::cat(SquanchyCat));
 
 static cl::opt<string> RuntimePath("runtime-path",
                                    cl::desc("Path to the squanchy runtime"),
@@ -65,6 +71,15 @@ static cl::opt<string> ModuleName("module-name",
                                   cl::desc("The module-name used in wasm2c"),
                                   cl::value_desc("module-name"),
                                   cl::init("squanchy"), cl::cat(SquanchyCat));
+
+static cl::opt<bool> ExtractRecursive("extract-recursive",
+                                      cl::desc("extract functions recursively"),
+                                      cl::init(false), cl::cat(SquanchyCat));
+
+static cl::opt<bool>
+    ExtractFunction("extract-function",
+                    cl::desc("extract function from the module"),
+                    cl::init(true), cl::cat(SquanchyCat));
 
 namespace squanchy {
 // Needs to be global otherwise we will see a crash during optimization
@@ -115,28 +130,51 @@ std::unique_ptr<llvm::Module> Deobfuscator::parse(const std::string &filename) {
 int Deobfuscator::getInstructionCount(llvm::Module *M) {
   int count = 0;
   for (auto &F : *M) {
-    for (auto &BB : F) {
-      count += BB.size();
-    }
+    if (F.isDeclaration())
+      continue;
+
+    count += getInstructionCount(&F);
+  }
+  return count;
+};
+
+int Deobfuscator::getInstructionCount(llvm::Function *F) {
+  int count = 0;
+  for (auto &BB : *F) {
+    count += BB.size();
   }
   return count;
 };
 
 bool Deobfuscator::deobfuscate() {
-  if (FunctionNames.empty()) {
+  if (PrintFunctions) {
+    int i = 0;
     for (auto &F : *M) {
-      if (!deobfuscateFunction(&F)) {
-        return false;
-      }
+      if (F.isDeclaration())
+        continue;
+
+      outs() << "[" << i++ << "] " << F.getName() << "\t ("
+             << getInstructionCount(&F) << ")\n";
     }
-  } else {
-    for (auto &F : *M) {
-      if (std::find(FunctionNames.begin(), FunctionNames.end(), F.getName()) !=
-          FunctionNames.end()) {
-        if (deobfuscateFunction(&F)) {
-          return true;
-        }
-      }
+    return true;
+  }
+
+  for (auto &FName : FunctionNames) {
+    auto F = M->getFunction(FName);
+    if (!F) {
+      errs() << "[!] Function " << FName << " not found!\n";
+      return false;
+    }
+
+    if (F->Function::isDeclaration()) {
+      errs() << "[!] Function " << FName << " is a declaration!\n";
+      return false;
+    }
+
+    outs() << "[*] Deobfuscating function: " << FName << "\n";
+
+    if (!deobfuscateFunction(F)) {
+      return false;
     }
   }
 
@@ -239,14 +277,19 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   optimizeFunction(F);
 
   // 8. Extract the function and globals
-  LLVMExtract(M.get(), {F->getName().str()}, {"data_segment_data.*"}, false);
+  if (ExtractFunction) {
+    LLVMExtract(M.get(), {F->getName().str()}, {"data_segment_data.*"},
+                ExtractRecursive);
+  }
 
   // 9. Optimize the functions with module passes enabled (folds the code
   // further)
   optimizeFunction(F, true);
 
   // 10. Remove the noinline attribute
-  F->removeFnAttr(Attribute::NoInline);
+  F = M->getFunction(F->getName());
+  if (F)
+    F->removeFnAttr(Attribute::NoInline);
 
   // 11. Write the output file
   writeOutput();
@@ -268,53 +311,6 @@ void Deobfuscator::writeOutput() {
   }
 
   M->print(OS, nullptr);
-}
-
-void Deobfuscator::handle_funcref_table_init(llvm::Function *F) {
-  // Handle funcref_table_init
-  // Check if there is any usage for funcref_table_init
-  // Todo: See how to initialize the funcref_table properly
-  auto funcref_table_init = M->getFunction("funcref_table_init");
-  if (!funcref_table_init) {
-    return;
-  }
-
-  // get a call that comes from init_tables
-  CallInst *call_funcref_table_init = nullptr;
-  int count = 0;
-
-  for (auto U : funcref_table_init->users()) {
-    if (auto *CI = dyn_cast<CallInst>(U)) {
-      call_funcref_table_init = CI;
-      count++;
-    }
-  }
-
-  if (!call_funcref_table_init || count > 1) {
-    errs() << "[!] Could not find the call to funcref_table_init uses( "
-              "count: "
-           << count << ")\n";
-    return;
-  }
-
-  // Get the number of elements in the table
-  auto *tableSize = call_funcref_table_init->getArgOperand(5);
-
-  // Get create_table function
-  auto create_table = M->getFunction("create_table");
-  if (!create_table) {
-    errs() << "[!] Could not find the create_table function\n";
-    return;
-  }
-
-  // Call create_table
-  auto CT =
-      CallInst::Create(create_table, {tableSize}, "", call_funcref_table_init);
-
-  CT->dump();
-
-  // Set table as call argument
-  // call_funcref_table_init->setArgOperand(0, CT);
 }
 
 void Deobfuscator::injectInitializer(llvm::Function *F) {
@@ -441,15 +437,18 @@ void Deobfuscator::setFunctionsAlwayInline() {
   setFunctionAlwayInline("load_data");
 
   // Older wasm2c
-  setFunctionAlwayInline("i8_store");
-  setFunctionAlwayInline("i16_store");
-  setFunctionAlwayInline("i32_store");
-  setFunctionAlwayInline("i64_store");
+  const std::string LoadStoreFunctions[] = {
+      "i8_store",     "i16_store",    "i32_store",    "i64_store",
+      "i8_load",      "i16_load",     "i32_load",     "i64_load",
+      "i32_load8_s",  "i64_load8_s",  "i32_load8_u",  "i64_load8_u",
+      "i32_load16_s", "i64_load16_s", "i32_load16_u", "i64_load16_u",
+      "i64_load32_s", "i64_load32_u", "f32_load",     "f64_load",
+      "f32_store",    "f64_store",    "i32_store8",   "i32_store16",
+      "i64_store8",   "i64_store16",  "i64_store32"};
 
-  setFunctionAlwayInline("i8_load");
-  setFunctionAlwayInline("i16_load");
-  setFunctionAlwayInline("i32_load");
-  setFunctionAlwayInline("i64_load");
+  for (auto &FName : LoadStoreFunctions) {
+    setFunctionAlwayInline(FName);
+  }
 
   // Newer wasm2c
   setFunctionAlwayInline("i8_store_default32");
@@ -473,6 +472,7 @@ void Deobfuscator::setFunctionsAlwayInline() {
   setFunctionAlwayInline("i64_load_unchecked");
 
   setFunctionAlwayInline("add_overflow");
+  setFunctionAlwayInline("func_types_eq");
 }
 
 void Deobfuscator::inlineFunctions(Function *F) {
