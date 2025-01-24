@@ -287,9 +287,12 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   optimizeFunction(F, true);
 
   // 10. Remove the noinline attribute
-  F = M->getFunction(F->getName());
-  if (F)
-    F->removeFnAttr(Attribute::NoInline);
+  for (llvm::Function &F : *M) {
+    if (F.hasFnAttribute(Attribute::NoInline) && F.hasFnAttribute(Attribute::AlwaysInline)) {
+      F.removeFnAttr(Attribute::NoInline);
+      F.removeFnAttr(Attribute::AlwaysInline);
+    }
+  }
 
   // 11. Write the output file
   writeOutput();
