@@ -188,7 +188,7 @@ bool Deobfuscator::deobfuscate() {
     int InstCountAfter = getInstructionCount(F);
 
     outs() << "[*] Instruction count before: " << InstCountBefore
-           << " after: " << InstCountAfter << "\n";
+           << " after: " << InstCountAfter << " (first run)\n";
   }
 
   // 9. Extract the function and globals
@@ -200,6 +200,16 @@ bool Deobfuscator::deobfuscate() {
   // 11. Optimize the functions with module passes enabled (folds the code
   // further)
   optimizeModule(M.get());
+
+  for (auto &FName : FunctionNames) {
+    auto F = M->getFunction(FName);
+    if (!F) {
+      continue;
+    }
+
+    outs() << "[*] Function: " << FName
+           << " Instruction count: " << getInstructionCount(F) << "\n";
+  }
 
   // 12. Write the output file
   writeOutput();
