@@ -53,7 +53,8 @@ private:
 
   void linkRuntime();
 
-  void optimizeFunction(llvm::Function *F, bool runModulePasses = false);
+  void optimizeFunction(llvm::Function *F);
+  void optimizeModule(llvm::Module *M);
 
   void inlineFunctions(llvm::Function *F);
 

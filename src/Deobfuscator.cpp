@@ -151,6 +151,7 @@ int Deobfuscator::getInstructionCount(llvm::Function *F) {
 };
 
 bool Deobfuscator::deobfuscate() {
+  // Print the functions
   if (PrintFunctions) {
     int i = 0;
     for (auto &F : *M) {
@@ -163,6 +164,7 @@ bool Deobfuscator::deobfuscate() {
     return true;
   }
 
+  // Deobfuscate the functions
   for (auto &FName : FunctionNames) {
     auto F = M->getFunction(FName);
     if (!F) {
@@ -177,10 +179,30 @@ bool Deobfuscator::deobfuscate() {
 
     outs() << "[*] Deobfuscating function: " << FName << "\n";
 
+    int InstCountBefore = getInstructionCount(F);
+
     if (!deobfuscateFunction(F)) {
       return false;
     }
+
+    int InstCountAfter = getInstructionCount(F);
+
+    outs() << "[*] Instruction count before: " << InstCountBefore
+           << " after: " << InstCountAfter << "\n";
   }
+
+  // 9. Extract the function and globals
+  if (ExtractFunction) {
+    LLVMExtract(M.get(), FunctionNames, {"data_segment_data.*"},
+                ExtractRecursive);
+  }
+
+  // 11. Optimize the functions with module passes enabled (folds the code
+  // further)
+  optimizeModule(M.get());
+
+  // 12. Write the output file
+  writeOutput();
 
   return true;
 };
@@ -209,7 +231,7 @@ void Deobfuscator::linkRuntime() {
   L.linkInModule(std::move(RuntimeModule), Linker::Flags::OverrideFromSrc);
 }
 
-void Deobfuscator::optimizeFunction(llvm::Function *F, bool runModulePasses) {
+void Deobfuscator::optimizeFunction(llvm::Function *F) {
   if (OptLevel == 0) {
     return;
   }
@@ -233,12 +255,31 @@ void Deobfuscator::optimizeFunction(llvm::Function *F, bool runModulePasses) {
                                                     ThinOrFullLTOPhase::None);
   FPM.run(*F, FAM);
 
-  if (runModulePasses) {
-    auto MPM = PB.buildPerModuleDefaultPipeline(OptimizationLevel::O3);
-    MPM.run(*this->M, MAM);
+  return;
+}
+
+void Deobfuscator::optimizeModule(llvm::Module *M) {
+  if (OptLevel == 0) {
+    return;
   }
 
-  return;
+  // Create a new function pass manager
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+
+  // Register all the basic analyses with the managers.
+  PassBuilder PB;
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  auto MPM = PB.buildPerModuleDefaultPipeline(OptimizationLevel::O3);
+  MPM.run(*this->M, MAM);
 }
 
 bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
@@ -271,6 +312,7 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
 
   // 4. Store modification to global variables, if any
   // Todo: Implement this
+  // Maybe not needed anymore ?
 
   // 5. Inline functions
   inlineFunctions(F);
@@ -292,23 +334,10 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   // 8. Optimize the functions
   optimizeFunction(F);
 
-  // 9. Extract the function and globals
-  if (ExtractFunction) {
-    LLVMExtract(M.get(), {F->getName().str()}, {"data_segment_data.*"},
-                ExtractRecursive);
-  }
-
   // 10. Replace Callocs
   if (ReplaceCallocs) {
     replaceCallocs(F);
   }
-
-  // 11. Optimize the functions with module passes enabled (folds the code
-  // further)
-  optimizeFunction(F, true);
-
-  // 12. Write the output file
-  writeOutput();
 
   return true;
 };
@@ -378,12 +407,24 @@ void Deobfuscator::injectInitializer(llvm::Function *F) {
   // Get Struct w2c_env
   StructType *STEnv =
       StructType::getTypeByName(M->getContext(), "struct.w2c_env");
-  if (!STEnv)
-    report_fatal_error("Could not find the struct w2c_env");
+  AllocaInst *w2c_env = nullptr;
+  if (STEnv) {
+    // Allocate an ptr for struct w2c_env
+    w2c_env = new AllocaInst(STEnv, 0, "w2c_env", &F->getEntryBlock().front());
+  } else {
+    // Use w2c_env_size to get the size of the struct
+    auto w2c_env_size = M->getGlobalVariable("w2c_env_size");
+    if (!w2c_env_size) {
+      report_fatal_error("Could not find w2c_env_size");
+    }
 
-  // Allocate an ptr for struct w2c_env
-  auto w2c_env =
-      new AllocaInst(STEnv, 0, "w2c_env", &F->getEntryBlock().front());
+    // Allocate an alloca for the struct
+    auto w2c_env_size_val = cast<ConstantInt>(w2c_env_size->getInitializer());
+    auto w2c_env_size_int = w2c_env_size_val->getZExtValue();
+    auto w2c_env_size_type = Type::getIntNTy(Context, w2c_env_size_int * 8);
+    w2c_env = new AllocaInst(w2c_env_size_type, 0, "w2c_env",
+                             &F->getEntryBlock().front());
+  }
 
   // Call wasm2c_squanchy_instantiate(w2c_squanchy* instance, struct
   // w2c_env* w2c_env_instance)

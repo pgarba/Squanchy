@@ -254,9 +254,6 @@ int LLVMExtract(Module *M, std::vector<std::string> ExtractFuncs,
           Function *CF = CB->getCalledFunction();
           if (!CF)
             continue;
-          if (CF->getName() == "w2c_squanchy_f20") {
-            CF->dump();
-          }
           if (CF->isDeclaration() || GVs.count(CF))
             continue;
           GVs.insert(CF);

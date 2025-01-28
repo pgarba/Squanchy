@@ -84,12 +84,13 @@ const uint32_t memoryBase = 0;
 const uint32_t tableBase = 1;
 
 /*
-  wasm2c generated values
+  wasm2c generated values example:
+
   const u64 wasm2c_squanchy_min_env_memory = 4096;
-const u64 wasm2c_squanchy_max_env_memory = 4096;
-const u8 wasm2c_squanchy_is64_env_memory = 0;
-const u32 wasm2c_squanchy_min_env_table = 6;
-const u32 wasm2c_squanchy_max_env_table = 6;
+  const u64 wasm2c_squanchy_max_env_memory = 4096;
+  const u8 wasm2c_squanchy_is64_env_memory = 0;
+  const u32 wasm2c_squanchy_min_env_table = 6;
+  const u32 wasm2c_squanchy_max_env_table = 6;
 */
 extern "C" const uint64_t wasm2c_squanchy_min_env_memory;
 extern "C" const uint64_t wasm2c_squanchy_max_env_memory;
@@ -119,15 +120,15 @@ struct w2c_env {
   const uint32_t StackSize = 5242880;
 };
 
+// Keep it here to keep the type
+extern "C" const int w2c_env_size = sizeof(struct w2c_env);
+
 // Firefox
 // TOTAL_STACK: 5242880
 
 extern "C" uint32_t *__attribute__((always_inline))
 w2c_env_DYNAMICTOP_PTR(struct w2c_env *env) {
   return (uint32_t *)env->DYNAMICTOP_PTR;
-
-  // return nullptr as its only used internaly to let the memory grow
-  // return nullptr;
 }
 
 extern "C" uint32_t *__attribute__((always_inline))
