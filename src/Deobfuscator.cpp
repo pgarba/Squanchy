@@ -81,6 +81,10 @@ static cl::opt<bool>
                     cl::desc("extract function from the module"),
                     cl::init(true), cl::cat(SquanchyCat));
 
+static cl::opt<bool> ReplaceCallocs("replace-callocs",
+                                    cl::desc("Replace callocs with allocas"),
+                                    cl::init(true), cl::cat(SquanchyCat));
+
 namespace squanchy {
 // Needs to be global otherwise we will see a crash during optimization
 llvm::LLVMContext Context;
@@ -206,6 +210,10 @@ void Deobfuscator::linkRuntime() {
 }
 
 void Deobfuscator::optimizeFunction(llvm::Function *F, bool runModulePasses) {
+  if (OptLevel == 0) {
+    return;
+  }
+
   // Create a new function pass manager
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
@@ -270,35 +278,64 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   // 6. Remove asm calls with sideeffect
   removeCallASMSideEffects(F);
 
-  // Set function noinline
+  // 7. Set function noinline and Remove the noinline attribute
   F->addFnAttr(Attribute::NoInline);
 
-  // 7. Optimize the functions
-  optimizeFunction(F);
-
-  // 8. Extract the function and globals
-  if (ExtractFunction) {
-    LLVMExtract(M.get(), {F->getName().str()}, {"data_segment_data.*"},
-                ExtractRecursive);
-  }
-
-  // 9. Optimize the functions with module passes enabled (folds the code
-  // further)
-  optimizeFunction(F, true);
-
-  // 10. Remove the noinline attribute
   for (llvm::Function &F : *M) {
-    if (F.hasFnAttribute(Attribute::NoInline) && F.hasFnAttribute(Attribute::AlwaysInline)) {
+    if (F.hasFnAttribute(Attribute::NoInline) &&
+        F.hasFnAttribute(Attribute::AlwaysInline)) {
       F.removeFnAttr(Attribute::NoInline);
       F.removeFnAttr(Attribute::AlwaysInline);
     }
   }
 
-  // 11. Write the output file
+  // 8. Optimize the functions
+  optimizeFunction(F);
+
+  // 9. Extract the function and globals
+  if (ExtractFunction) {
+    LLVMExtract(M.get(), {F->getName().str()}, {"data_segment_data.*"},
+                ExtractRecursive);
+  }
+
+  // 10. Replace Callocs
+  if (ReplaceCallocs) {
+    replaceCallocs(F);
+  }
+
+  // 11. Optimize the functions with module passes enabled (folds the code
+  // further)
+  optimizeFunction(F, true);
+
+  // 12. Write the output file
   writeOutput();
 
   return true;
 };
+
+void Deobfuscator::replaceCallocs(llvm::Function *F) {
+  // Replace callocs with allocas
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E;) {
+    auto II = I;
+    I++;
+    if (CallInst *CI = dyn_cast<CallInst>(&*II)) {
+      if (Function *Callee = CI->getCalledFunction()) {
+        if (Callee->getName() == "calloc") {
+          // Get the size and count of calloc
+          auto Size = CI->getArgOperand(0);
+          auto Count = CI->getArgOperand(1);
+
+          // Replace calloc with alloca
+          IRBuilder<> Builder(CI);
+          auto Alloca = Builder.CreateAlloca(Type::getInt8Ty(Context),
+                                             Builder.CreateMul(Size, Count));
+          CI->replaceAllUsesWith(Alloca);
+          CI->eraseFromParent();
+        }
+      }
+    }
+  }
+}
 
 void Deobfuscator::writeOutput() {
   if (OutputFile.empty()) {
@@ -338,13 +375,15 @@ void Deobfuscator::injectInitializer(llvm::Function *F) {
   if (!ST)
     report_fatal_error("Could not find the struct type");
 
+  // Get Struct w2c_env
+  StructType *STEnv =
+      StructType::getTypeByName(M->getContext(), "struct.w2c_env");
+  if (!STEnv)
+    report_fatal_error("Could not find the struct w2c_env");
+
   // Allocate an ptr for struct w2c_env
-  const int w2c_envSize = 80;
   auto w2c_env =
-      new AllocaInst(Type::getInt8Ty(Context), 0,
-                     ConstantInt::getIntegerValue(Type::getInt32Ty(Context),
-                                                  APInt(w2c_envSize, 32)),
-                     "w2c_env", &F->getEntryBlock().front());
+      new AllocaInst(STEnv, 0, "w2c_env", &F->getEntryBlock().front());
 
   // Call wasm2c_squanchy_instantiate(w2c_squanchy* instance, struct
   // w2c_env* w2c_env_instance)

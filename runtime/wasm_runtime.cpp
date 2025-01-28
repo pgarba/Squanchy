@@ -2,6 +2,8 @@
     Some helpers needed to unfold the lifted wasm2c code and let it fold
 */
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 // The wasm runtime header.
 #include "wasm-rt.h"
@@ -34,6 +36,7 @@ wasm_rt_allocate_memory(wasm_rt_memory_t *memory, uint64_t initial_pages,
   memory->max_pages = max_pages;
   memory->size = initial_pages * PAGE_SIZE;
   memory->data = (uint8_t *)calloc(memory->size, 1);
+  memory->is64 = is64;
 }
 
 /*
@@ -80,6 +83,20 @@ wasm_rt_allocate_externref_table(wasm_rt_externref_table_t *table,
 const uint32_t memoryBase = 0;
 const uint32_t tableBase = 1;
 
+/*
+  wasm2c generated values
+  const u64 wasm2c_squanchy_min_env_memory = 4096;
+const u64 wasm2c_squanchy_max_env_memory = 4096;
+const u8 wasm2c_squanchy_is64_env_memory = 0;
+const u32 wasm2c_squanchy_min_env_table = 6;
+const u32 wasm2c_squanchy_max_env_table = 6;
+*/
+extern "C" const uint64_t wasm2c_squanchy_min_env_memory;
+extern "C" const uint64_t wasm2c_squanchy_max_env_memory;
+extern "C" const uint8_t wasm2c_squanchy_is64_env_memory;
+extern "C" const uint32_t wasm2c_squanchy_min_env_table;
+extern "C" const uint32_t wasm2c_squanchy_max_env_table;
+
 // Memory
 extern "C" uint8_t table[0];
 extern "C" uint8_t memory[0];
@@ -87,55 +104,94 @@ extern "C" uint8_t DYNAMICTOP_PTR[0];
 extern "C" uint8_t STACKTOP[0];
 extern "C" uint8_t STACK_MAX[0];
 
+// Out struct to hold the wasm2c env
+struct w2c_env {
+  uint32_t *DYNAMICTOP_PTR;
+
+  wasm_rt_memory_t *memory;
+  uint32_t memoryBase;
+
+  wasm_rt_funcref_table_t *table;
+  uint32_t tableBase;
+
+  // Taken from Firefox
+  uint32_t *STACKTOP;
+  const uint32_t StackSize = 5242880;
+};
+
 // Firefox
 // TOTAL_STACK: 5242880
 
 extern "C" uint32_t *__attribute__((always_inline))
-w2c_env_DYNAMICTOP_PTR(struct w2c_env *) {
-  return (uint32_t *)DYNAMICTOP_PTR;
+w2c_env_DYNAMICTOP_PTR(struct w2c_env *env) {
+  return (uint32_t *)env->DYNAMICTOP_PTR;
+
+  // return nullptr as its only used internaly to let the memory grow
+  // return nullptr;
 }
 
 extern "C" uint32_t *__attribute__((always_inline))
-w2c_env_STACKTOP(struct w2c_env *) {
-  return (uint32_t *)STACKTOP;
+w2c_env_STACKTOP(struct w2c_env *env) {
+  env->STACKTOP = (uint32_t *)calloc(1, sizeof(uint32_t));
+
+  return env->STACKTOP;
 }
 
 extern "C" uint32_t *__attribute__((always_inline))
-w2c_env_STACK_MAX(struct w2c_env *) {
-  return (uint32_t *)STACK_MAX;
+w2c_env_STACK_MAX(struct w2c_env *env) {
+  return &env->STACKTOP[env->StackSize];
 }
 
 extern "C" wasm_rt_memory_t *__attribute__((always_inline))
-w2c_env_memory(struct w2c_env *) {
-  return (wasm_rt_memory_t *)memory;
+w2c_env_memory(struct w2c_env *env) {
+  env->memory = (wasm_rt_memory_t *)calloc(1, sizeof(wasm_rt_memory_t));
+
+  // Minimum 1 page
+  uint64_t initial_pages = wasm2c_squanchy_min_env_memory / PAGE_SIZE;
+  uint64_t max_pages = wasm2c_squanchy_max_env_memory / PAGE_SIZE;
+
+  // Check if at least 1 page
+  if (initial_pages == 0) {
+    initial_pages = 1;
+  }
+
+  if (max_pages == 0) {
+    max_pages = 1;
+  }
+
+  // Allocate and mark as 64 bit
+  wasm_rt_allocate_memory(env->memory, initial_pages, max_pages, true);
+
+  // Set DYNAMICTOP_PTR
+  env->DYNAMICTOP_PTR = (uint32_t *)&env->memory->data[env->memory->size];
+
+  return (wasm_rt_memory_t *)env->memory;
 }
 
 extern "C" uint32_t *__attribute__((always_inline))
-w2c_env_memoryBase(struct w2c_env *) {
-  return (uint32_t *)&memory[memoryBase];
+w2c_env_memoryBase(struct w2c_env *env) {
+  env->memoryBase = 0;
+  return (uint32_t *)&env->memoryBase;
 }
 
 // Todo: allocate this dynamically by parsing the params from funcref_table_init
 // call and create an alloca
 extern "C" wasm_rt_funcref_table_t *__attribute__((always_inline))
-w2c_env_table(struct w2c_env *) {
-  return (wasm_rt_funcref_table_t *)table;
+w2c_env_table(struct w2c_env *env) {
+  env->table = (wasm_rt_funcref_table_t *)calloc(
+      wasm2c_squanchy_min_env_table, sizeof(wasm_rt_funcref_table_t));
+
+  // Init
+  wasm_rt_allocate_funcref_table(env->table, wasm2c_squanchy_min_env_table,
+                                 wasm2c_squanchy_max_env_table);
+
+  return env->table;
 }
 
 extern "C" uint32_t *__attribute__((always_inline))
-w2c_env_tableBase(struct w2c_env *) {
-  return (uint32_t *)&table[tableBase];
+w2c_env_tableBase(struct w2c_env *env) {
+  env->tableBase = 0;
+  return (uint32_t *)&env->tableBase;
 }
 
-extern "C" wasm_rt_funcref_table_t *__attribute__((always_inline))
-create_table(uint32_t elements) {
-  wasm_rt_funcref_table_t *table =
-      (wasm_rt_funcref_table_t *)malloc(sizeof(wasm_rt_funcref_table_t));
-  table->data =
-      (wasm_rt_funcref_t *)calloc(elements, sizeof(wasm_rt_funcref_t));
-  table->size = elements;
-  table->max_size = elements;
-
-  return table;
-}
 }; // extern "C"

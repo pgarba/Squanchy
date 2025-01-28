@@ -69,6 +69,8 @@ private:
   void injectInitializer(llvm::Function *F);
   void handle_funcref_table_init(llvm::Function *F);
 
+  void replaceCallocs(llvm::Function *F);
+
   void writeOutput();
 };
 
