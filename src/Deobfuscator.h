@@ -54,6 +54,7 @@ private:
   void linkRuntime();
 
   void optimizeFunction(llvm::Function *F);
+  void optimizeFunctionWithCustomPipeline(llvm::Function *F, bool SimplifyCFG=true);
   void optimizeModule(llvm::Module *M);
 
   void inlineFunctions(llvm::Function *F);
@@ -71,6 +72,8 @@ private:
   void handle_funcref_table_init(llvm::Function *F);
 
   void replaceCallocs(llvm::Function *F);
+
+  void overrideTarget(llvm::Module *M);
 
   void writeOutput();
 };

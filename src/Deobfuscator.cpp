@@ -32,6 +32,42 @@
 
 #include <llvm/Target/TargetMachine.h>
 
+// Passes
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
+#include "llvm/Transforms/Coroutines/CoroElide.h"
+#include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/Scalar/BDCE.h"
+#include "llvm/Transforms/Scalar/CallSiteSplitting.h"
+#include "llvm/Transforms/Scalar/ConstraintElimination.h"
+#include "llvm/Transforms/Scalar/CorrelatedValuePropagation.h"
+#include "llvm/Transforms/Scalar/DeadStoreElimination.h"
+#include "llvm/Transforms/Scalar/EarlyCSE.h"
+#include "llvm/Transforms/Scalar/Float2Int.h"
+#include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/JumpThreading.h"
+#include "llvm/Transforms/Scalar/LoopSink.h"
+#include "llvm/Transforms/Scalar/LowerExpectIntrinsic.h"
+#include "llvm/Transforms/Scalar/MemCpyOptimizer.h"
+#include "llvm/Transforms/Scalar/MergedLoadStoreMotion.h"
+#include "llvm/Transforms/Scalar/NewGVN.h"
+#include "llvm/Transforms/Scalar/Reassociate.h"
+#include "llvm/Transforms/Scalar/SCCP.h"
+#include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Scalar/SpeculativeExecution.h"
+#include "llvm/Transforms/Scalar/TailRecursionElimination.h"
+#include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/EntryExitInstrumenter.h"
+#include "llvm/Transforms/Utils/InjectTLIMappings.h"
+#include "llvm/Transforms/Utils/LibCallsShrinkWrap.h"
+#include "llvm/Transforms/Utils/MoveAutoInit.h"
+#include "llvm/Transforms/Vectorize/VectorCombine.h"
+
 #include "LLVMExtract.h"
 
 using namespace llvm;
@@ -81,9 +117,10 @@ static cl::opt<bool>
                     cl::desc("extract function from the module"),
                     cl::init(true), cl::cat(SquanchyCat));
 
+// Disable for now as it might lead to wrong results ...
 static cl::opt<bool> ReplaceCallocs("replace-callocs",
                                     cl::desc("Replace callocs with allocas"),
-                                    cl::init(true), cl::cat(SquanchyCat));
+                                    cl::init(false), cl::cat(SquanchyCat));
 
 namespace squanchy {
 // Needs to be global otherwise we will see a crash during optimization
@@ -112,6 +149,10 @@ Deobfuscator::Deobfuscator(const std::string &filename,
   if (!RuntimeModule) {
     llvm::report_fatal_error("[!] Could not parse the runtime file!", false);
   }
+
+  // Override TargetTriple
+  overrideTarget(M.get());
+  overrideTarget(this->RuntimeModule.get());
 
   // Initialize the module
   this->TLII = new TargetLibraryInfoImpl(Triple(M->getTargetTriple()));
@@ -188,7 +229,7 @@ bool Deobfuscator::deobfuscate() {
     int InstCountAfter = getInstructionCount(F);
 
     outs() << "[*] Instruction count before: " << InstCountBefore
-           << " after: " << InstCountAfter << " (first run)\n";
+           << " after: " << InstCountAfter << "\n";
   }
 
   // 9. Extract the function and globals
@@ -268,6 +309,168 @@ void Deobfuscator::optimizeFunction(llvm::Function *F) {
   return;
 }
 
+void Deobfuscator::optimizeFunctionWithCustomPipeline(llvm::Function *F,
+                                                      bool SimplifyCFG) {
+  if (OptLevel == 0) {
+    return;
+  }
+
+  // Create a new function pass manager
+  ModuleAnalysisManager MAM;
+  FunctionAnalysisManager FAM;
+  LoopAnalysisManager LAM;
+  CGSCCAnalysisManager CAM;
+
+  FunctionPassManager FPM;
+  LoopPassManager LPM;
+
+  llvm::PipelineTuningOptions opts;
+  opts.InlinerThreshold = 0;
+
+  llvm::PassBuilder PB(nullptr, opts);
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.registerCGSCCAnalyses(CAM);
+  PB.crossRegisterProxies(LAM, FAM, CAM, MAM);
+
+  // https://github.com/llvm/llvm-project/blob/c9e5c42ad1bba84670d6f7ebe7859f4f12063c5a/llvm/lib/Passes/PassBuilderPipelines.cpp#L1586
+  FPM.addPass(EntryExitInstrumenterPass(false));
+
+  FPM.addPass(LowerExpectIntrinsicPass());
+  if (SimplifyCFG) {
+    FPM.addPass(SimplifyCFGPass());
+  }
+  FPM.addPass(SROAPass(SROAOptions::PreserveCFG));
+  FPM.addPass(EarlyCSEPass());
+  FPM.addPass(CallSiteSplittingPass());
+
+  // buildModuleOptimizationPipeline
+  // FPM.addPass(LoopVersioningLICMPass());
+  FPM.addPass(Float2IntPass());
+
+  // Add loop passes here
+  // https://github.com/llvm/llvm-project/blob/64075837b5532108a1fe96a5b158feb7a9025694/llvm/lib/Passes/PassBuilderPipelines.cpp#L1473
+
+  FPM.addPass(InjectTLIMappings());
+
+  // https://github.com/llvm/llvm-project/blob/64075837b5532108a1fe96a5b158feb7a9025694/llvm/lib/Passes/PassBuilderPipelines.cpp#L545
+  FPM.addPass(SROAPass(SROAOptions::PreserveCFG));
+
+  FPM.addPass(EarlyCSEPass(true));
+
+  bool EnableKnowledgeRetention = false;
+  if (EnableKnowledgeRetention)
+    FPM.addPass(AssumeSimplifyPass());
+
+  bool EnableGVNHoist = true;
+  if (EnableGVNHoist)
+    FPM.addPass(GVNHoistPass());
+
+  if (SimplifyCFG) {
+    bool EnableGVNSink = true;
+    if (EnableGVNSink) {
+      FPM.addPass(GVNSinkPass());
+      FPM.addPass(
+          SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+    }
+  }
+
+  FPM.addPass(SpeculativeExecutionPass(true));
+  FPM.addPass(JumpThreadingPass());
+  FPM.addPass(CorrelatedValuePropagationPass());
+
+  if (SimplifyCFG) {
+    FPM.addPass(
+        SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+  }
+
+  // Only run instcombine once
+  InstCombineOptions ICO;
+  ICO.setMaxIterations(1);
+
+  FPM.addPass(InstCombinePass(ICO));
+  FPM.addPass(AggressiveInstCombinePass());
+
+  // Optimizes for size
+  FPM.addPass(LibCallsShrinkWrapPass());
+
+  FPM.addPass(TailCallElimPass());
+  FPM.addPass(
+      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+
+  FPM.addPass(ReassociatePass());
+
+  FPM.addPass(ConstraintEliminationPass());
+
+  // todo add LoopPasss
+  // https://github.com/llvm/llvm-project/blob/64075837b5532108a1fe96a5b158feb7a9025694/llvm/lib/Passes/PassBuilderPipelines.cpp#L627
+
+  if (SimplifyCFG) {
+    FPM.addPass(
+        SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+  }
+  FPM.addPass(InstCombinePass(ICO));
+
+  // Delete small array after loop unroll.
+  FPM.addPass(SROAPass(SROAOptions::PreserveCFG));
+
+  FPM.addPass(VectorCombinePass(true));
+
+  // Eliminate redundancies.
+  FPM.addPass(MergedLoadStoreMotionPass());
+
+  bool RunNewGVN = false;
+  if (RunNewGVN)
+    FPM.addPass(NewGVNPass());
+  else
+    FPM.addPass(GVNPass());
+
+  FPM.addPass(SCCPPass());
+  FPM.addPass(BDCEPass());
+  FPM.addPass(InstCombinePass(ICO));
+
+  FPM.addPass(JumpThreadingPass());
+  FPM.addPass(CorrelatedValuePropagationPass());
+
+  // Finally, do an expensive DCE pass to catch all the dead code exposed by
+  // the simplifications and basic cleanup after all the simplifications.
+  FPM.addPass(ADCEPass());
+
+  // Specially optimize memory movement as it doesn't look like dataflow in SSA.
+  FPM.addPass(MemCpyOptPass());
+  FPM.addPass(DSEPass());
+
+  FPM.addPass(MoveAutoInitPass());
+
+  FPM.addPass(CoroElidePass());
+
+  FPM.addPass(SimplifyCFGPass(SimplifyCFGOptions()
+                                  .convertSwitchRangeToICmp(true)
+                                  .hoistCommonInsts(true)
+                                  .sinkCommonInsts(true)));
+  FPM.addPass(InstCombinePass(ICO));
+
+  // Run Opts
+  bool DoRun = true;
+  int Run = 1;
+  while (DoRun) {
+    DoRun = false;
+
+    int InstCountBefore = getInstructionCount(F);
+
+    auto HasOpt = FPM.run(*F, FAM);
+
+    int InstCountAfter = getInstructionCount(F);
+
+    outs() << "[" << Run << "]" << "Before: " << InstCountBefore << " After: " << InstCountAfter
+           << "\n";
+    if (InstCountAfter != InstCountBefore)
+      DoRun = true;
+  };
+}
+
 void Deobfuscator::optimizeModule(llvm::Module *M) {
   if (OptLevel == 0) {
     return;
@@ -295,7 +498,7 @@ void Deobfuscator::optimizeModule(llvm::Module *M) {
 bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   if (!isWasm2CFunction(F)) {
     errs() << "[!] Function " << F->getName()
-           << " is not generated bt wasm2c\n";
+           << " is not generated by wasm2c\n";
     return false;
   }
 
@@ -342,7 +545,9 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   }
 
   // 8. Optimize the functions
+  optimizeFunctionWithCustomPipeline(F);
   optimizeFunction(F);
+
 
   // 10. Replace Callocs
   if (ReplaceCallocs) {
@@ -564,6 +769,12 @@ void Deobfuscator::setFunctionsAlwayInline() {
   setFunctionAlwayInline("i32_load_unchecked");
   setFunctionAlwayInline("i64_load_unchecked");
 
+  setFunctionAlwayInline("i32_load8_u_unchecked");
+  setFunctionAlwayInline("i32_store8_unchecked");
+
+  setFunctionAlwayInline("i32_store8_default32");
+  setFunctionAlwayInline("i32_load8_u_default32");
+
   setFunctionAlwayInline("add_overflow");
   setFunctionAlwayInline("func_types_eq");
 }
@@ -605,6 +816,13 @@ void Deobfuscator::inlineFunctions(Function *F) {
   } while (Changes);
 
   return;
+}
+
+void Deobfuscator::overrideTarget(llvm::Module *M) {
+  std::string Target = "x86_64-linux-gnu";
+
+  M->setTargetTriple(Target);
+  M->setDataLayout("");
 }
 
 } // namespace squanchy
