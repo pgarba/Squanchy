@@ -69,6 +69,7 @@
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
 
 #include "LLVMExtract.h"
+#include "SiMBAPass.h"
 
 using namespace llvm;
 using namespace std;
@@ -335,6 +336,10 @@ void Deobfuscator::optimizeFunctionWithCustomPipeline(llvm::Function *F,
   PB.registerCGSCCAnalyses(CAM);
   PB.crossRegisterProxies(LAM, FAM, CAM, MAM);
 
+  // Run Early SiMBA
+  OptimizationGuide OG;
+  FPM.addPass(SiMBAPass(OG));
+
   // https://github.com/llvm/llvm-project/blob/c9e5c42ad1bba84670d6f7ebe7859f4f12063c5a/llvm/lib/Passes/PassBuilderPipelines.cpp#L1586
   FPM.addPass(EntryExitInstrumenterPass(false));
 
@@ -452,6 +457,9 @@ void Deobfuscator::optimizeFunctionWithCustomPipeline(llvm::Function *F,
                                   .sinkCommonInsts(true)));
   FPM.addPass(InstCombinePass(ICO));
 
+  // Run Late SiMBA
+  FPM.addPass(SiMBAPass(OG));
+
   // Run Opts
   bool DoRun = true;
   int Run = 1;
@@ -464,10 +472,11 @@ void Deobfuscator::optimizeFunctionWithCustomPipeline(llvm::Function *F,
 
     int InstCountAfter = getInstructionCount(F);
 
-    outs() << "[" << Run << "]" << "Before: " << InstCountBefore << " After: " << InstCountAfter
-           << "\n";
-    if (InstCountAfter != InstCountBefore)
+    outs() << "[" << Run << "]" << "Before: " << InstCountBefore
+           << " After: " << InstCountAfter << "\n";
+    if (InstCountAfter != InstCountBefore || OG.MBAFound) {
       DoRun = true;
+    }
   };
 }
 
@@ -547,7 +556,6 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   // 8. Optimize the functions
   optimizeFunctionWithCustomPipeline(F);
   optimizeFunction(F);
-
 
   // 10. Replace Callocs
   if (ReplaceCallocs) {

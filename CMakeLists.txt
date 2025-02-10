@@ -3,6 +3,9 @@ project(squanchy)
 
 find_package(LLVM REQUIRED CONFIG)
 
+# Add Z3
+find_package(Z3 REQUIRED)
+
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "LLVM_TOOLS ${LLVM_TOOLS_BINARY_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
@@ -40,20 +43,50 @@ include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS} 
 )
 
+# z3
+message(STATUS "Compiling with Z3 SMT solver")
+find_package(Z3 REQUIRED)
+message(STATUS "Z3 version: ${Z3_VERSION}")
+if(TARGET z3::libz3)
+    link_libraries(z3::libz3)
+elseif(DEFINED Z3_INCLUDE_DIRS)
+    include_directories(${Z3_INCLUDE_DIRS})
+else()
+    if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+        include_directories(${Z3_INCLUDE_DIRS})
+    endif()
+    # message(FATAL_ERROR "Unexpected Z3 package search outcome: neither target z3::libz3 not variable Z3_INCLUDE_DIRS exists.")
+endif()
+
+# if not defined Z3_CXX_INCLUDE_DIRS
+if(NOT DEFINED Z3_CXX_INCLUDE_DIRS)
+    set(Z3_CXX_INCLUDE_DIRS "/usr/include/z3")
+endif()
+
+message(STATUS "Z3 Z3_INCLUDE_DIRS: " ${Z3_INCLUDE_DIRS})
+message(STATUS "Z3 include directory: " ${Z3_CXX_INCLUDE_DIRS})
+message(STATUS "Z3 library: " ${Z3_LIBRARIES})
+include_directories(${Z3_CXX_INCLUDE_DIRS} ${Z3_INCLUDE_DIRS} "include")
+
 # Now build our tools
 add_executable(squanchy 
 src/Squanchy.cpp 
 src/Deobfuscator.cpp 
 src/LLVMHelpers.cpp
 src/LLVMExtract.cpp
+src/SiMBAPass.cpp
 )
 
 # Find the libraries that correspond to the LLVM components
 # that we wish to use
 # llvm_map_components_to_libnames(llvm_libs -19)
+add_subdirectory(dependencies/SiMBA- EXCLUDE_FROM_ALL)
+
+# add SiMBA to the project
+include_directories(dependencies/SiMBA-/include)
 
 # Link against LLVM libraries
-target_link_libraries(squanchy ${LLVM_LIBS})
+target_link_libraries(squanchy ${LLVM_LIBS} LSiMBA++ z3)
 
 # Custom buld step to compule the runtime
 add_custom_command(
