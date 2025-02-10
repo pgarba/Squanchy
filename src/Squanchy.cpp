@@ -20,6 +20,9 @@ static cl::opt<string> OutputFilename("o", cl::desc("Output llvm ir filename"),
                                       cl::value_desc("filename"),
                                       cl::cat(SquanchyCat));
 
+static cl::opt<bool> Override("override", cl::desc("Override LLVM thresholds"),
+                              cl::cat(SquanchyCat), cl::init(false));
+
 void ParseLLVMOptions(int argc, char **argv) {
   SmallVector<const char *, 20> newArgv;
   BumpPtrAllocator A;
@@ -29,38 +32,39 @@ void ParseLLVMOptions(int argc, char **argv) {
     newArgv.push_back(Saver.save(argv[i]).data());
   }
 
-  // Gives a nice improvment and code folds like before
-  // At least those 4 options are needed to let large code fold and create valid
-  // results
-  newArgv.push_back(Saver.save("-memdep-block-scan-limit=1000000").data());
-  newArgv.push_back(Saver.save("-dse-memoryssa-walklimit=1000000").data());
-  newArgv.push_back(Saver.save("-available-load-scan-limit=1000000").data());
-  newArgv.push_back(Saver.save("-dse-memoryssa-scanlimit=1000000").data());
+  if (Override) {
+    // At least those 4 options are needed to let large code fold and create
+    // valid results
+    newArgv.push_back(Saver.save("-memdep-block-scan-limit=1000000").data());
+    newArgv.push_back(Saver.save("-dse-memoryssa-walklimit=1000000").data());
+    newArgv.push_back(Saver.save("-available-load-scan-limit=1000000").data());
+    newArgv.push_back(Saver.save("-dse-memoryssa-scanlimit=1000000").data());
 
-  newArgv.push_back(
-      Saver.save("-earlycse-mssa-optimization-cap=1000000").data());
-  newArgv.push_back(Saver.save("-memssa-check-limit=1000000").data());
+    newArgv.push_back(
+        Saver.save("-earlycse-mssa-optimization-cap=1000000").data());
+    newArgv.push_back(Saver.save("-memssa-check-limit=1000000").data());
 
-  newArgv.push_back(
-      Saver.save("-dse-memoryssa-defs-per-block-limit=1000000").data());
-  newArgv.push_back(
-      Saver.save("-dse-memoryssa-partial-store-limit=1000000").data());
-  newArgv.push_back(
-      Saver.save("-dse-memoryssa-path-check-limit=1000000").data());
-  newArgv.push_back(Saver.save("-dse-memoryssa-otherbb-cost=2").data());
-  newArgv.push_back(Saver.save("-memdep-block-number-limit=1000000").data());
-  newArgv.push_back(Saver.save("-gvn-max-block-speculations=1000000").data());
-  newArgv.push_back(Saver.save("-gvn-max-num-deps=1000000").data());
-  newArgv.push_back(Saver.save("-gvn-hoist-max-chain-length=-1").data());
-  newArgv.push_back(Saver.save("-gvn-hoist-max-depth=-1").data());
-  newArgv.push_back(Saver.save("-gvn-hoist-max-bbs=-1").data());
+    newArgv.push_back(
+        Saver.save("-dse-memoryssa-defs-per-block-limit=1000000").data());
+    newArgv.push_back(
+        Saver.save("-dse-memoryssa-partial-store-limit=1000000").data());
+    newArgv.push_back(
+        Saver.save("-dse-memoryssa-path-check-limit=1000000").data());
+    newArgv.push_back(Saver.save("-dse-memoryssa-otherbb-cost=2").data());
+    newArgv.push_back(Saver.save("-memdep-block-number-limit=1000000").data());
+    newArgv.push_back(Saver.save("-gvn-max-block-speculations=1000000").data());
+    newArgv.push_back(Saver.save("-gvn-max-num-deps=1000000").data());
+    newArgv.push_back(Saver.save("-gvn-hoist-max-chain-length=-1").data());
+    newArgv.push_back(Saver.save("-gvn-hoist-max-depth=-1").data());
+    newArgv.push_back(Saver.save("-gvn-hoist-max-bbs=-1").data());
 
-  newArgv.push_back(Saver.save("-unroll-threshold=1000000").data());
-  newArgv.push_back(Saver.save("-unroll-count=64").data());
+    newArgv.push_back(Saver.save("-unroll-threshold=1000000").data());
+    newArgv.push_back(Saver.save("-unroll-count=64").data());
 
-  newArgv.push_back(Saver.save("-dfa-cost-threshold=1000000").data());
-  newArgv.push_back(Saver.save("-dfa-max-path-length=1000000").data());
-  newArgv.push_back(Saver.save("-dfa-max-num-paths=1000000").data());
+    newArgv.push_back(Saver.save("-dfa-cost-threshold=1000000").data());
+    newArgv.push_back(Saver.save("-dfa-max-path-length=1000000").data());
+    newArgv.push_back(Saver.save("-dfa-max-num-paths=1000000").data());
+  }
 
   int newArgc = static_cast<int>(newArgv.size());
   llvm::cl::ParseCommandLineOptions(newArgc, &newArgv[0]);

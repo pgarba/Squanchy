@@ -38,7 +38,7 @@ PreservedAnalyses SiMBAPass::run(Function &F, FunctionAnalysisManager &FAM) {
   // Run the simplification
   int MBACount = Parser.simplify();
 
-  if (SiMBAStats) {
+  if (SiMBAStats && MBACount) {
     auto stop = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(stop - start);
 

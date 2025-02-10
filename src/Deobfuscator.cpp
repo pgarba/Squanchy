@@ -123,6 +123,16 @@ static cl::opt<bool> ReplaceCallocs("replace-callocs",
                                     cl::desc("Replace callocs with allocas"),
                                     cl::init(false), cl::cat(SquanchyCat));
 
+static cl::opt<bool>
+    ReplaceInstanceRefs("replace-instance-refs",
+                        cl::desc("Replace call instance references"),
+                        cl::init(false), cl::cat(SquanchyCat));
+
+static cl::opt<bool>
+    InjectInitializer("inject-initializer",
+                      cl::desc("Inject initializer for wasm instance"),
+                      cl::init(true), cl::cat(SquanchyCat));
+
 namespace squanchy {
 // Needs to be global otherwise we will see a crash during optimization
 llvm::LLVMContext Context;
@@ -530,7 +540,9 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   setFunctionsAlwayInline();
 
   // 3. Call Init functions
-  injectInitializer(F);
+  if (InjectInitializer) {
+    injectInitializer(F);
+  }
 
   // 4. Store modification to global variables, if any
   // Todo: Implement this
@@ -559,11 +571,86 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
 
   // 10. Replace Callocs
   if (ReplaceCallocs) {
-    replaceCallocs(F);
+    // replaceCallocs(F);
   }
+
+  // 11. Replace Instance references
+  if (ReplaceInstanceRefs) {
+    replaceInstanceRefs(F);
+    optimizeFunction(F);
+  }
+
+  // 12. Replace FUNCREF_TABLE
+  replaceFUNCREF_TABLE(F);
+  optimizeFunction(F);
 
   return true;
 };
+
+void Deobfuscator::replaceFUNCREF_TABLE(llvm::Function *F) {
+  auto FuncRefTable = M->getGlobalVariable("FUNCREF_TABLE");
+  if (FuncRefTable) {
+    // Find store
+
+    std::vector<StoreInst *> Stores;
+
+    for (auto U : FuncRefTable->users()) {
+      // Check if constantexpression
+      if (auto *CE = dyn_cast<ConstantExpr>(U)) {
+        if (CE->getOpcode() == Instruction::GetElementPtr) {
+          for (auto CEU : CE->users()) {
+            if (auto *SI = dyn_cast<StoreInst>(CEU)) {
+              if (SI->getFunction() != F) {
+                continue;
+              }
+
+              Stores.push_back(SI);
+            }
+          }
+        }
+
+      } else if (auto *SI = dyn_cast<StoreInst>(U)) {
+        if (!SI)
+          continue;
+
+        if (SI->getFunction() != F)
+          continue;
+
+        Stores.push_back(SI);
+      }
+    }
+
+    // Delete now
+    for (auto SI : Stores) {
+      SI->eraseFromParent();
+    }
+  }
+}
+
+void Deobfuscator::replaceInstanceRefs(llvm::Function *F) {
+  auto Arg0 = F->getArg(0);
+
+  // Replace instance references
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E;) {
+    auto II = I;
+    I++;
+    CallInst *CI = dyn_cast<CallInst>(&*II);
+    if (!CI)
+      continue;
+
+    if (CI->getNumOperands() == 0)
+      continue;
+
+    auto CF = CI->getCalledFunction();
+    if (!CF)
+      continue;
+
+    if (!CF->getName().starts_with("w2c_squanchy_"))
+      continue;
+
+    CI->setArgOperand(0, Arg0);
+  }
+}
 
 void Deobfuscator::replaceCallocs(llvm::Function *F) {
   // Replace callocs with allocas

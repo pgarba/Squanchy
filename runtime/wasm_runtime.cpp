@@ -8,6 +8,8 @@
 // The wasm runtime header.
 #include "wasm-rt.h"
 
+// #define USE_RAM
+
 // The default page size is 64KB.
 #define PAGE_SIZE 65536
 
@@ -26,6 +28,15 @@
 
 extern "C" {
 
+// Memory
+extern "C" uint8_t FUNCREF_TABLE[0];
+extern "C" uint8_t EXTERNREF_TABLE[0];
+extern "C" uint8_t MEMORY[0];
+extern "C" uint8_t DYNAMICTOP_PTR[0];
+extern "C" uint8_t STACKTOP[0];
+extern "C" uint8_t STACK_MAX[0];
+extern "C" uint8_t MEMORY_PAGES[0];
+
 /*
     Allocate memory for the wasm runtime.
 */
@@ -35,7 +46,13 @@ wasm_rt_allocate_memory(wasm_rt_memory_t *memory, uint64_t initial_pages,
   memory->pages = initial_pages;
   memory->max_pages = max_pages;
   memory->size = initial_pages * PAGE_SIZE;
+
+  // #ifdef USE_RAM
   memory->data = (uint8_t *)calloc(memory->size, 1);
+  //  #else
+  //    memory->data = (uint8_t *)MEMORY_PAGES;
+  //  #endif
+
   memory->is64 = is64;
 }
 
@@ -44,7 +61,9 @@ wasm_rt_allocate_memory(wasm_rt_memory_t *memory, uint64_t initial_pages,
 */
 void __attribute__((always_inline))
 wasm_rt_free_memory(wasm_rt_memory_t *memory) {
+#ifdef USE_RAM
   free(memory->data);
+#endif
   memory->data = nullptr;
 }
 
@@ -61,8 +80,12 @@ wasm_rt_allocate_funcref_table(wasm_rt_funcref_table_t *table,
                                uint32_t elements, uint32_t max_elements) {
   table->size = elements;
   table->max_size = max_elements;
-  table->data =
-      (wasm_rt_funcref_t *)calloc(table->size, sizeof(wasm_rt_funcref_t));
+  // #ifdef USE_RAM
+  // table->data =
+  //    (wasm_rt_funcref_t *)calloc(table->size, sizeof(wasm_rt_funcref_t));
+  // #else
+  table->data = (wasm_rt_funcref_t *)FUNCREF_TABLE;
+  // #endif
 }
 
 /*
@@ -73,8 +96,13 @@ wasm_rt_allocate_externref_table(wasm_rt_externref_table_t *table,
                                  uint32_t elements, uint32_t max_elements) {
   table->size = elements;
   table->max_size = max_elements;
-  table->data =
-      (wasm_rt_externref_t *)calloc(table->size, sizeof(wasm_rt_externref_t));
+  // #ifdef USE_RAM
+  //   table->data =
+  //       (wasm_rt_externref_t *)calloc(table->size,
+  //       sizeof(wasm_rt_externref_t));
+  // #else
+  table->data = (wasm_rt_externref_t *)EXTERNREF_TABLE;
+  // #endif
 }
 
 /*
@@ -98,55 +126,61 @@ extern "C" const uint8_t wasm2c_squanchy_is64_env_memory;
 extern "C" const uint32_t wasm2c_squanchy_min_env_table;
 extern "C" const uint32_t wasm2c_squanchy_max_env_table;
 
-// Memory
-extern "C" uint8_t table[0];
-extern "C" uint8_t memory[0];
-extern "C" uint8_t DYNAMICTOP_PTR[0];
-extern "C" uint8_t STACKTOP[0];
-extern "C" uint8_t STACK_MAX[0];
+// Firefox
+// TOTAL_STACK: 5242880
+#define StackSize 5242880
 
 // Out struct to hold the wasm2c env
 struct w2c_env {
   uint32_t *DYNAMICTOP_PTR;
 
-  wasm_rt_memory_t *memory;
+  wasm_rt_memory_t memory;
   uint32_t memoryBase;
 
-  wasm_rt_funcref_table_t *table;
-  uint32_t tableBase;
+  wasm_rt_funcref_table_t funcref_table;
+  uint32_t funcref_tableBase;
 
   // Taken from Firefox
   uint32_t *STACKTOP;
-  const uint32_t StackSize = 5242880;
+
+  //  const uint32_t StackSize = 5242880;
 };
 
 // Keep it here to keep the type
 extern "C" const int w2c_env_size = sizeof(struct w2c_env);
-
-// Firefox
-// TOTAL_STACK: 5242880
 
 extern "C" uint32_t *__attribute__((always_inline))
 w2c_env_DYNAMICTOP_PTR(struct w2c_env *env) {
   return (uint32_t *)env->DYNAMICTOP_PTR;
 }
 
+extern "C" void *Stack;
 extern "C" uint32_t *__attribute__((always_inline))
 w2c_env_STACKTOP(struct w2c_env *env) {
-  env->STACKTOP = (uint32_t *)calloc(1, sizeof(uint32_t));
+  // #ifdef USE_RAM
+  // env->STACKTOP = (uint32_t *)calloc(1, StackSize); // alloca(StackSize);
+  // #else
+  env->STACKTOP = (uint32_t *)&Stack;
+
+  void **p = (void **)env->STACKTOP;
+  Stack = (void *)alloca(10000); // alloca(StackSize);
+  //  #endif
 
   return env->STACKTOP;
 }
 
 extern "C" uint32_t *__attribute__((always_inline))
 w2c_env_STACK_MAX(struct w2c_env *env) {
-  return &env->STACKTOP[env->StackSize];
+  // #ifdef USE_RAM
+  //  return &env->STACKTOP[env->StackSize];
+  // return (uint32_t *)&StackSize;
+  // #else
+  return (uint32_t *)STACK_MAX;
+  // #endif
 }
 
 extern "C" wasm_rt_memory_t *__attribute__((always_inline))
 w2c_env_memory(struct w2c_env *env) {
-  env->memory = (wasm_rt_memory_t *)calloc(1, sizeof(wasm_rt_memory_t));
-
   // Minimum 1 page
   uint64_t initial_pages = wasm2c_squanchy_min_env_memory / PAGE_SIZE;
   uint64_t max_pages = wasm2c_squanchy_max_env_memory / PAGE_SIZE;
@@ -161,12 +195,14 @@ w2c_env_memory(struct w2c_env *env) {
   }
 
   // Allocate and mark as 64 bit
-  wasm_rt_allocate_memory(env->memory, initial_pages, max_pages, true);
+  wasm_rt_allocate_memory(&env->memory, initial_pages, max_pages, true);
 
   // Set DYNAMICTOP_PTR
-  env->DYNAMICTOP_PTR = (uint32_t *)&env->memory->data[env->memory->size];
+  env->DYNAMICTOP_PTR =
+      (uint32_t *)DYNAMICTOP_PTR; // (uint32_t
+                                  // *)&env->memory.data[env->memory.size];
 
-  return (wasm_rt_memory_t *)env->memory;
+  return (wasm_rt_memory_t *)&env->memory;
 }
 
 extern "C" uint32_t *__attribute__((always_inline))
@@ -177,22 +213,21 @@ w2c_env_memoryBase(struct w2c_env *env) {
 
 // Todo: allocate this dynamically by parsing the params from funcref_table_init
 // call and create an alloca
+wasm_rt_funcref_table_t wasm_rt_funcref_table;
 extern "C" wasm_rt_funcref_table_t *__attribute__((always_inline))
 w2c_env_table(struct w2c_env *env) {
-  env->table = (wasm_rt_funcref_table_t *)calloc(
-      wasm2c_squanchy_min_env_table, sizeof(wasm_rt_funcref_table_t));
-
   // Init
-  wasm_rt_allocate_funcref_table(env->table, wasm2c_squanchy_min_env_table,
+  wasm_rt_allocate_funcref_table(&env->funcref_table,
+                                 wasm2c_squanchy_min_env_table,
                                  wasm2c_squanchy_max_env_table);
 
-  return env->table;
+  return &env->funcref_table;
 }
 
 extern "C" uint32_t *__attribute__((always_inline))
 w2c_env_tableBase(struct w2c_env *env) {
-  env->tableBase = 0;
-  return (uint32_t *)&env->tableBase;
+  env->funcref_tableBase = 0;
+  return (uint32_t *)&env->funcref_tableBase;
 }
 
 }; // extern "C"
