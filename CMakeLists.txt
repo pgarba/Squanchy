@@ -60,13 +60,29 @@ endif()
 
 # if not defined Z3_CXX_INCLUDE_DIRS
 if(NOT DEFINED Z3_CXX_INCLUDE_DIRS)
-    set(Z3_CXX_INCLUDE_DIRS "/usr/include/z3")
+    if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+        set(Z3_CXX_INCLUDE_DIRS "/usr/include")
+    elseif (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+        set(Z3_CXX_INCLUDE_DIRS "/opt/homebrew/Cellar/z3/4.13.4/include")
+    endif()
 endif()
 
 message(STATUS "Z3 Z3_INCLUDE_DIRS: " ${Z3_INCLUDE_DIRS})
 message(STATUS "Z3 include directory: " ${Z3_CXX_INCLUDE_DIRS})
 message(STATUS "Z3 library: " ${Z3_LIBRARIES})
 include_directories(${Z3_CXX_INCLUDE_DIRS} ${Z3_INCLUDE_DIRS} "include")
+
+# Souper
+include_directories("/Users/peter/github/saturn16/Saturn/deps/souper/include")
+link_directories("/Users/peter/github/saturn16/Saturn/deps/souper/lib")
+
+# Hiredis
+include_directories("/opt/homebrew/Cellar/hiredis/1.2.0/include")
+link_directories("/opt/homebrew/Cellar/hiredis/1.2.0/lib")
+
+# Alive2
+include_directories("/Users/peter/github/saturn16/Saturn/deps/alive2/include")
+link_directories("/Users/peter/github/saturn16/Saturn/deps/alive2/lib")
 
 # Now build our tools
 add_executable(squanchy 
@@ -75,6 +91,11 @@ src/Deobfuscator.cpp
 src/LLVMHelpers.cpp
 src/LLVMExtract.cpp
 src/SiMBAPass.cpp
+src/SymLLVM.cpp
+src/ConstantSynthesis.cpp
+src/ConstSynthesis.cpp
+src/SolverCache.cpp
+src/Solver.cpp
 )
 
 # Find the libraries that correspond to the LLVM components
@@ -86,7 +107,7 @@ add_subdirectory(dependencies/SiMBA- EXCLUDE_FROM_ALL)
 include_directories(dependencies/SiMBA-/include)
 
 # Link against LLVM libraries
-target_link_libraries(squanchy ${LLVM_LIBS} LSiMBA++ z3)
+target_link_libraries(squanchy ${LLVM_LIBS} LSiMBA++ ${Z3_LIBRARIES} hiredis souperExtractor kleeExpr souperCodegen souperInfer souperInst souperKVStore souperParser souperSMTLIB2 ir smt tools util)
 
 # Custom buld step to compule the runtime
 add_custom_command(

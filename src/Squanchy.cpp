@@ -33,6 +33,7 @@ void ParseLLVMOptions(int argc, char **argv) {
   }
 
   if (Override) {
+    outs() << "[*] Overriding LLVM thresholds\n";
     // At least those 4 options are needed to let large code fold and create
     // valid results
     newArgv.push_back(Saver.save("-memdep-block-scan-limit=1000000").data());
@@ -79,7 +80,7 @@ int main(int argc, char **argv) {
   InitializeAllAsmPrinters();
   InitializeAllAsmParsers();
 
-  cl::HideUnrelatedOptions(SquanchyCat);
+  //cl::HideUnrelatedOptions(SquanchyCat);
   ParseLLVMOptions(argc, argv);
 
   // Deobfuscate the input file

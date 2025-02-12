@@ -3,6 +3,7 @@
 #include <vector>
 
 namespace llvm {
+class BasicBlock;
 class DominatorTree;
 class Function;
 class Module;
@@ -57,6 +58,7 @@ private:
   void optimizeFunctionWithCustomPipeline(llvm::Function *F,
                                           bool SimplifyCFG = true);
   void optimizeModule(llvm::Module *M);
+  void runReg2Mem(llvm::Function *F);
 
   void inlineFunctions(llvm::Function *F);
 
@@ -79,6 +81,8 @@ private:
   void overrideTarget(llvm::Module *M);
 
   void writeOutput();
+
+  void sliceBasicBlock(llvm::Function *F);
 };
 
 } // namespace squanchy

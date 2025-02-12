@@ -54,6 +54,7 @@
 #include "llvm/Transforms/Scalar/MergedLoadStoreMotion.h"
 #include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Scalar/Reassociate.h"
+#include "llvm/Transforms/Scalar/Reg2Mem.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
@@ -70,6 +71,7 @@
 
 #include "LLVMExtract.h"
 #include "SiMBAPass.h"
+#include "SymLLVM.h"
 
 using namespace llvm;
 using namespace std;
@@ -291,6 +293,31 @@ void Deobfuscator::linkRuntime() {
   auto RuntimeModule = llvm::CloneModule(*this->RuntimeModule);
 
   L.linkInModule(std::move(RuntimeModule), Linker::Flags::OverrideFromSrc);
+}
+
+void Deobfuscator::runReg2Mem(llvm::Function *F) {
+  // Register all the basic analyses with the managers.
+  ModuleAnalysisManager MAM;
+  FunctionAnalysisManager FAM;
+  LoopAnalysisManager LAM;
+  CGSCCAnalysisManager CAM;
+
+  FunctionPassManager FPM;
+  LoopPassManager LPM;
+
+  llvm::PipelineTuningOptions opts;
+  opts.InlinerThreshold = 0;
+
+  llvm::PassBuilder PB(nullptr, opts);
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.registerCGSCCAnalyses(CAM);
+  PB.crossRegisterProxies(LAM, FAM, CAM, MAM);
+
+  FPM.addPass(RegToMemPass());
+  FPM.run(*F, FAM);
 }
 
 void Deobfuscator::optimizeFunction(llvm::Function *F) {
@@ -569,9 +596,12 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   optimizeFunctionWithCustomPipeline(F);
   optimizeFunction(F);
 
+  // 9. Proof BasicBlocks
+  sliceBasicBlock(F);
+
   // 10. Replace Callocs
   if (ReplaceCallocs) {
-    // replaceCallocs(F);
+    replaceCallocs(F);
   }
 
   // 11. Replace Instance references
@@ -918,6 +948,82 @@ void Deobfuscator::overrideTarget(llvm::Module *M) {
 
   M->setTargetTriple(Target);
   M->setDataLayout("");
+}
+
+void Deobfuscator::sliceBasicBlock(llvm::Function *F) {
+  // Run Reg2Mem first
+  //runReg2Mem(F);
+
+  // Get all basicblocks and sort by dominator tree
+  DominatorTree DT(*F);
+  std::vector<BasicBlock *> BBs;
+  for (auto &BB : *F) {
+    BBs.push_back(&BB);
+  }
+
+  std::sort(BBs.begin(), BBs.end(),
+            [&](BasicBlock *A, BasicBlock *B) { return DT.dominates(A, B); });
+
+  for (auto BB : BBs) {
+    // Slice the basic block
+    std::set<Instruction *> Slice;
+    Slice.insert(&BB->back());
+
+    SmallVector<uint64_t, 2> Values;
+
+    symllvm::Symllvm S;
+    S.setDebug(true);
+
+    if (auto BR = dyn_cast<BranchInst>(&BB->back())) {
+      if (BR->isUnconditional()) {
+        continue;
+      }
+
+      auto Solved = S.solveValues(F, dyn_cast<Instruction>(BR->getCondition()), Values);
+      if (!Solved) {
+        continue;
+      }
+
+      if (Values.size() == 2) {
+        // outs() << "No simplification found\n";
+      } else {
+        outs() << "[!] Simplification found\n";
+      }
+    } else if (auto Switch = dyn_cast<SwitchInst>(&BB->back())) {
+      S.solveValues(F, dyn_cast<Instruction>(Switch->getCondition()), Values);
+
+      // Check if values exist
+      for (auto Case : Switch->cases()) {
+        bool Found = false;
+        for (auto V : Values) {
+          if (V == Case.getCaseValue()->getZExtValue()) {
+            Found = true;
+          }
+        }
+
+        if (!Found) {
+          // outs() << "SwitchCase: Not found: " << Case.getCaseValue()->getSExtValue() << "\n";
+        }
+      }
+
+    } else {
+      /*
+      BB->back().dump();
+      outs() << "Implement me!\n";
+      */
+      continue;
+    }
+
+    // Print the slice
+    /*
+    outs() << "BasicBlock: " << BB->getName() << "\n";
+    for (auto I : Slice) {
+      I->print(outs());
+      outs() << "\n";
+    }
+    outs() << "\n";
+    */
+  }
 }
 
 } // namespace squanchy
