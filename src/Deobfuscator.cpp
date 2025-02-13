@@ -131,9 +131,18 @@ static cl::opt<bool>
                         cl::init(false), cl::cat(SquanchyCat));
 
 static cl::opt<bool>
+    ReplaceFunctionTableRefs("replace-function-table",
+                             cl::desc("Replace function table references"),
+                             cl::init(true), cl::cat(SquanchyCat));
+
+static cl::opt<bool>
     InjectInitializer("inject-initializer",
                       cl::desc("Inject initializer for wasm instance"),
                       cl::init(true), cl::cat(SquanchyCat));
+
+static cl::opt<bool> EnableSimba("enable-simba",
+                                 cl::desc("Run SiMBA++ to simplifiy MBAs"),
+                                 cl::init(true), cl::cat(SquanchyCat));
 
 namespace squanchy {
 // Needs to be global otherwise we will see a crash during optimization
@@ -375,7 +384,8 @@ void Deobfuscator::optimizeFunctionWithCustomPipeline(llvm::Function *F,
 
   // Run Early SiMBA
   OptimizationGuide OG;
-  FPM.addPass(SiMBAPass(OG));
+  if (EnableSimba)
+    FPM.addPass(SiMBAPass(OG));
 
   // https://github.com/llvm/llvm-project/blob/c9e5c42ad1bba84670d6f7ebe7859f4f12063c5a/llvm/lib/Passes/PassBuilderPipelines.cpp#L1586
   FPM.addPass(EntryExitInstrumenterPass(false));
@@ -495,7 +505,8 @@ void Deobfuscator::optimizeFunctionWithCustomPipeline(llvm::Function *F,
   FPM.addPass(InstCombinePass(ICO));
 
   // Run Late SiMBA
-  FPM.addPass(SiMBAPass(OG));
+  if (EnableSimba)
+    FPM.addPass(SiMBAPass(OG));
 
   // Run Opts
   bool DoRun = true;
@@ -611,8 +622,10 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   }
 
   // 12. Replace FUNCREF_TABLE
-  replaceFUNCREF_TABLE(F);
-  optimizeFunction(F);
+  if (ReplaceFunctionTableRefs) {
+    replaceFUNCREF_TABLE(F);
+    optimizeFunction(F);
+  }
 
   return true;
 };
@@ -952,7 +965,7 @@ void Deobfuscator::overrideTarget(llvm::Module *M) {
 
 void Deobfuscator::sliceBasicBlock(llvm::Function *F) {
   // Run Reg2Mem first
-  //runReg2Mem(F);
+  // runReg2Mem(F);
 
   // Get all basicblocks and sort by dominator tree
   DominatorTree DT(*F);
@@ -964,15 +977,14 @@ void Deobfuscator::sliceBasicBlock(llvm::Function *F) {
   std::sort(BBs.begin(), BBs.end(),
             [&](BasicBlock *A, BasicBlock *B) { return DT.dominates(A, B); });
 
+  symllvm::Symllvm S;
+
   for (auto BB : BBs) {
     // Slice the basic block
     std::set<Instruction *> Slice;
     Slice.insert(&BB->back());
 
     SmallVector<uint64_t, 2> Values;
-
-    symllvm::Symllvm S;
-    // S.setDebug(true);
 
     if (auto BR = dyn_cast<BranchInst>(&BB->back())) {
       if (BR->isUnconditional()) {
@@ -985,13 +997,17 @@ void Deobfuscator::sliceBasicBlock(llvm::Function *F) {
         continue;
       }
 
-      if (Values.size() == 2) {
-        // outs() << "No simplification found\n";
-      } else {
-        outs() << "[!] Simplification found\n";
+      if (Values.size() != 2) {
+        outs() << "[SymLLVM] Opaque Predicate detected!\n";
+        report_fatal_error("Implement me!");
       }
     } else if (auto Switch = dyn_cast<SwitchInst>(&BB->back())) {
-      S.solveValues(F, dyn_cast<Instruction>(Switch->getCondition()), Values);
+      // Set MaxValues 10 for testing
+      auto Valid = S.solveValues(
+          F, dyn_cast<Instruction>(Switch->getCondition()), Values, 10);
+      if (!Valid) {
+        continue;
+      }
 
       // Check if values exist
       for (auto Case : Switch->cases()) {
@@ -1003,36 +1019,26 @@ void Deobfuscator::sliceBasicBlock(llvm::Function *F) {
         }
 
         if (!Found) {
-          // outs() << "SwitchCase: Not found: " <<
-          // Case.getCaseValue()->getSExtValue() << "\n";
+          outs() << "SwitchCase: Not found: "
+                 << Case.getCaseValue()->getSExtValue() << "\n";
         }
       }
     } else if (auto RI = dyn_cast<ReturnInst>(&BB->back())) {
       if (auto RV = RI->getReturnValue()) {
+        // Nothing to do on constants
         if (isa<ConstantInt>(RV)) {
           continue;
         }
 
-        S.solveValues(F, dyn_cast<Instruction>(RI->getReturnValue()), Values);
+        auto Valid = S.solveValues(
+            F, dyn_cast<Instruction>(RI->getReturnValue()), Values, 2);
+        if (!Valid || Values.size() > 1) {
+          continue;
+        }
+
+        outs() << "[SymLLVM] Opaque Predicate detected!\n";
       }
-
-    } else {
-      /*
-      BB->back().dump();
-      outs() << "Implement me!\n";
-      */
-      continue;
     }
-
-    // Print the slice
-    /*
-    outs() << "BasicBlock: " << BB->getName() << "\n";
-    for (auto I : Slice) {
-      I->print(outs());
-      outs() << "\n";
-    }
-    outs() << "\n";
-    */
   }
 }
 

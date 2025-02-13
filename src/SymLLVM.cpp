@@ -23,6 +23,17 @@ using namespace std;
 using namespace souper;
 
 extern SolverCache SaturnSC;
+extern cl::OptionCategory SquanchyCat;
+
+static cl::opt<bool>
+    UseSouper("enable-souper",
+              cl::desc("Uses souper instead symllvm to prove values"),
+              cl::cat(SquanchyCat), cl::init(false));
+
+static cl::opt<bool>
+    SymLLVMDebug("symllvm-debug",
+              cl::desc("Enable debug output in SymLLVM"),
+              cl::cat(SquanchyCat), cl::init(false));
 
 typedef struct _ProvedConstant {
   Inst *I;
@@ -111,10 +122,9 @@ int solveEdges(llvm::Function *F, uint64_t BBVA, llvm::BasicBlock *B,
     std::string Query = BuildQuery(IC, CR->BPCs, CR->PCs, Mapping, &ModelInsts,
                                    Precondition, true);
 
-    /*
-        outs() << "[Slicer] SMT Query:\n";
-        outs() << Query << "\n";
-    */
+    outs() << "[Slicer] SMT Query:\n";
+    outs() << Query << "\n";
+
     // Solve it (cached)
     SaturnSC.isSatisfiableCached(Query, IsSat, ModelInsts.size(), &ModelVals,
                                  SolverTimeout);
@@ -355,33 +365,43 @@ void symllvm::Symllvm::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
 
     // Check Uses for a store
     for (auto U : Ins->users()) {
-      auto SI = dyn_cast<StoreInst>(U);
-      if (!SI)
-        continue;
+      llvm::Instruction *SI = nullptr;
 
-      // Skip stores that dominate the current instruction
-      if (dominates(DT, dyn_cast<Instruction>(U), Ins))
-        continue;
-
-      // Skip stores that come after the instruction we  for
-      if (dominates(DT, I, dyn_cast<Instruction>(U)))
-        continue;
-
-      // Skip stores that are in different level in different blocks
-      if (SI->getParent() != I->getParent() &&
-          DT->getNode(SI->getParent())->getLevel() ==
-              DT->getNode(I->getParent())->getLevel()) {
-        continue;
+      // Check if supported
+      if (isa<StoreInst>(U)) {
+        SI = dyn_cast<Instruction>(U);
+      } else if (isa<LoadInst>(U)) {
+        SI = dyn_cast<Instruction>(U);
+      } else if (isa<GetElementPtrInst>(U)) {
+        SI = dyn_cast<GetElementPtrInst>(U);
       }
 
-      // Skip stores that are already in the AST
-      if (Dis.find(SI) != Dis.end())
+      if (SI) {
+        // Skip stores that dominate the current instruction
+        if (dominates(DT, dyn_cast<Instruction>(U), Ins))
+          continue;
+
+        // Skip stores that come after the instruction we  for
+        if (dominates(DT, I, dyn_cast<Instruction>(U)))
+          continue;
+
+        // Skip stores that are in different level in different blocks
+        if (SI->getParent() != I->getParent() &&
+            DT->getNode(SI->getParent())->getLevel() ==
+                DT->getNode(I->getParent())->getLevel()) {
+          continue;
+        }
+
+        // Skip stores that are already in the AST
+        if (Dis.find(SI) != Dis.end())
+          continue;
+
+        Dis.insert(SI);
+        Q.push_front(SI);
+
+        AST.push_back(SI);
         continue;
-
-      Dis.insert(SI);
-      Q.push_front(SI);
-
-      AST.push_back(SI);
+      }
     }
   }
 
@@ -403,11 +423,9 @@ void symllvm::Symllvm::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
   // Verify the dominance
   for (int i = 0; i < (AST.size() - 1); i++) {
     if (!dominates(DT, AST[i], AST[i + 1])) {
-      outs() << "No Dom: AST[" << i << "] ";
-      AST[i]->print(outs());
-      outs() << " < AST[" << i + 1 << "] ";
-      AST[i + 1]->dump();
-      // report_fatal_error("Invalid AST!", false);
+      // Abort here as it can lead to wrong results
+      AST.clear();
+      return;
     }
   }
 
@@ -473,9 +491,6 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
     llvm::SmallVectorImpl<llvm::Value *> &Variables,
     std::map<std::string, z3::expr *> &VarMap, int OverrideBitWidth,
     bool &Error) {
-  // llvm::DenseMap<llvm::Value *, Z3Entry> ValueMap;
-  // llvm::DenseMap<z3::expr *, unsigned int> BitMap;
-
   ValueMap.clear();
   BitMap.clear();
 
@@ -593,8 +608,6 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
       // ZExt
       auto V = getZ3Val(Z3Ctx, ZExt->getOperand(0), OverrideBitWidth);
 
-      outs() << V->to_string() << "\n";
-
       // Convert bool to bv if needed
       if (V->get_sort().is_bool()) {
         *V = boolToBV(*V, 1);
@@ -639,6 +652,11 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
       ValueMap[GEP] = Z3Entry(Array.Exp, true, IndexExpr);
       BitMap[ValueMap[GEP].Exp] = 8;
     } else if (auto Load = dyn_cast<LoadInst>(CurInst)) {
+      if (!ValueMap.contains(Load->getOperand(0))) {
+        CurInst->getParent()->dump();
+        // Create a var
+        getZ3Val(Z3Ctx, Load->getOperand(0), OverrideBitWidth);
+      }
       // Load
       auto &PtrValue = ValueMap[Load->getOperand(0)];
 
@@ -699,11 +717,11 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
         auto V = getZ3Val(Z3Ctx, NewValue, OverrideBitWidth);
         auto NewV = storeValueLittleEndian(PtrValue.Exp, PtrValue.Index, V);
 
-        // Update CurValue
-        ValueMap[Store->getOperand(1)] = NewV;
+        // Kepp PtrValue because we need to GEP later for load/stores
+        ValueMap[Store->getOperand(1)] = PtrValue;
         BitMap[ValueMap[Store->getOperand(1)].Exp] = 8;
 
-        CurrentMemoryState[PtrValue.Exp] = ValueMap[Store->getOperand(1)].Exp;
+        CurrentMemoryState[PtrValue.Exp] = NewV;
       } else {
         // Check if same bitwidth
         if (CurValueBitWidth == NewValueBitWidth) {
@@ -898,12 +916,38 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
   return Result;
 }
 
-bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
-                                   llvm::SmallVectorImpl<uint64_t> &Results) {
+void sliceInstruction(llvm::Function &F, llvm::Instruction *InstToSlice,
+                      std::vector<llvm::Instruction *> &Slice);
 
-  // Test
-  // solveEdges(F, 1000, I->getParent(), I, 32, Results);
-  // return !Results.empty();
+bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
+                                   llvm::SmallVectorImpl<uint64_t> &Results,
+                                   int MaxResults) {
+  if (!this->Debug && SymLLVMDebug) {
+    this->Debug = true;
+  }
+
+  if (UseSouper) {
+    // Measure time
+    auto Start = std::chrono::high_resolution_clock::now();
+
+    solveEdges(F, 1000, I->getParent(), I, 32, Results);
+
+    // Measure time
+    auto End = std::chrono::high_resolution_clock::now();
+    auto Duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(End - Start)
+            .count();
+
+    llvm::outs() << "[Z3] Solved in " << Duration << "ms\n";
+
+    // Print Results
+    for (auto r : Results) {
+      outs() << format_hex(r, 8) << " ";
+    }
+    outs() << "\n";
+
+    return !Results.empty();
+  }
 
   // Create DT
   DominatorTree DT(*F);
@@ -915,9 +959,11 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
   SmallVector<llvm::Instruction *, 32> AST;
 
   // Get AST and Variables
-  // this->getAST(&DT, I, AST, Variables, true);
+  this->getAST(&DT, I, AST, Variables, true);
 
   // Use the whole BB
+  // Use for testing only
+  /*
   auto BB = I->getParent();
   for (auto I = BB->begin(); I != BB->end(); I++) {
     AST.push_back(&*I);
@@ -926,6 +972,7 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
   for (auto &p : F->args()) {
     Variables.push_back(&p);
   }
+  */
 
   if (AST.empty()) {
     return false;
@@ -1020,7 +1067,7 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
           std::chrono::duration_cast<std::chrono::milliseconds>(End - Start)
               .count();
 
-      llvm::outs() << "Time: " << Duration << "ms\n";
+      llvm::outs() << "[Z3] Solved in " << Duration << "ms\n";
     } else {
       // Solve ...
       IsSat = s.check();
@@ -1043,6 +1090,11 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
       if (!Found) {
         Results.push_back(Result64);
       }
+    }
+
+    // Stopped if asked for
+    if (MaxResults && Results.size() >= MaxResults) {
+      break;
     }
   } while (IsSat == z3::sat);
 
@@ -1194,6 +1246,11 @@ z3::expr *symllvm::Symllvm::loadValueLittleEndian(z3::expr *Memory,
 
   z3::expr Value = getConstant(0, BitWidth);
   for (int i = 0; i < BitWidth / 8; i++) {
+    // Check if index is 32 bit
+    if (Index->get_sort().bv_size() > 32) {
+      Index = new z3::expr(Index->extract(31, 0));
+    }
+
     auto Byte = z3::select(*CurrentMemory, *Index + i);
 
     if (BitWidth != 8) {
@@ -1262,4 +1319,47 @@ z3::expr symllvm::Symllvm::boolToBV(z3::expr &BoolExpr, int BitWidth) {
   auto Zero = Z3Ctx.bv_val(0, BitWidth);
 
   return z3::ite(BoolExpr, One, Zero);
+}
+
+bool DomTreeLevelBefore(DominatorTree *DT, const Instruction *InstA,
+                        const Instruction *InstB) {
+  // Use ordered basic block in case the 2 instructions are in the same
+  // block.
+  if (InstA->getParent() == InstB->getParent())
+    return InstA->comesBefore(InstB);
+
+  DomTreeNode *DA = DT->getNode(InstA->getParent());
+  DomTreeNode *DB = DT->getNode(InstB->getParent());
+  return DA->getLevel() < DB->getLevel();
+}
+
+void sliceInstruction(llvm::Function &F, llvm::Instruction *InstToSlice,
+                      std::vector<Instruction *> &Slice) {
+  // new Slicer
+  llvm::SmallSetVector<llvm::Instruction *, 1> WorkList;
+
+  // Set start instruction
+  Slice.push_back(InstToSlice);
+  WorkList.insert(InstToSlice);
+
+  while (!WorkList.empty()) {
+    auto *I = WorkList.pop_back_val();
+
+    for (auto &O : I->operands()) {
+      if (auto *NI = llvm::dyn_cast<llvm::Instruction>(O.get())) {
+        auto IExists = std::find(Slice.begin(), Slice.end(), NI);
+        if (IExists == Slice.end()) {
+          Slice.push_back(NI);
+          WorkList.insert(NI);
+        }
+      }
+    }
+  }
+
+  // Now sort the Instructions
+  llvm::DominatorTree DT(F);
+  std::sort(Slice.begin(), Slice.end(),
+            [&](llvm::Instruction *a, llvm::Instruction *b) {
+              return DomTreeLevelBefore(&DT, a, b);
+            });
 }

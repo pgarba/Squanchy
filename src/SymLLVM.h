@@ -46,7 +46,7 @@ public:
   ~Symllvm() {};
 
   bool solveValues(llvm::Function *F, llvm::Instruction *I,
-                   llvm::SmallVectorImpl<uint64_t> &Results);
+                   llvm::SmallVectorImpl<uint64_t> &Results, int MaxResults=0);
 
   void setDebug(bool Debug = true) { this->Debug = Debug; };
 

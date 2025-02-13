@@ -20,8 +20,8 @@ static cl::opt<string> OutputFilename("o", cl::desc("Output llvm ir filename"),
                                       cl::value_desc("filename"),
                                       cl::cat(SquanchyCat));
 
-static cl::opt<bool> Override("override", cl::desc("Override LLVM thresholds"),
-                              cl::cat(SquanchyCat), cl::init(false));
+static cl::opt<bool> OverrideThresholds("override-thresholds", cl::desc("Override LLVM thresholds"),
+                              cl::cat(SquanchyCat), cl::init(true));
 
 void ParseLLVMOptions(int argc, char **argv) {
   SmallVector<const char *, 20> newArgv;
@@ -32,7 +32,11 @@ void ParseLLVMOptions(int argc, char **argv) {
     newArgv.push_back(Saver.save(argv[i]).data());
   }
 
-  if (Override) {
+  int newArgc = static_cast<int>(newArgv.size());
+  llvm::cl::ParseCommandLineOptions(newArgc, &newArgv[0]);
+
+  // THIS Option is not parsed yet so it doesnt work !!!
+  if (OverrideThresholds) {
     outs() << "[*] Overriding LLVM thresholds\n";
     // At least those 4 options are needed to let large code fold and create
     // valid results
@@ -67,7 +71,7 @@ void ParseLLVMOptions(int argc, char **argv) {
     newArgv.push_back(Saver.save("-dfa-max-num-paths=1000000").data());
   }
 
-  int newArgc = static_cast<int>(newArgv.size());
+  newArgc = static_cast<int>(newArgv.size());
   llvm::cl::ParseCommandLineOptions(newArgc, &newArgv[0]);
 }
 
