@@ -79,8 +79,8 @@ int solveEdges(llvm::Function *F, uint64_t BBVA, llvm::BasicBlock *B,
   }
 
   // Print CR
-  //ReplacementContext Context;
-  //CR->printLHS(llvm::outs(), Context);
+  // ReplacementContext Context;
+  // CR->printLHS(llvm::outs(), Context);
 
   // Get solutions
   souper::Inst *Const = nullptr;
@@ -177,8 +177,13 @@ int solveEdges(llvm::Function *F, uint64_t BBVA, llvm::BasicBlock *B,
 
 bool symllvm::Symllvm::isSupportedIntrinsic(llvm::CallInst *CI) {
   auto F = CI->getCalledFunction();
-  if (!F->isIntrinsic())
+  if (!F->isIntrinsic()) {
+    // Check if calloc/malloc
+    if (F->getName() == "calloc" || F->getName() == "malloc") {
+      return true;
+    }
     return false;
+  }
 
   // llvm.ctpop.i8 intrinsic
   // llvm.fshl.i64
@@ -324,7 +329,7 @@ void symllvm::Symllvm::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
         continue;
       }
 
-      auto OpIns = dyn_cast<Instruction>(O->stripPointerCasts());
+      auto OpIns = dyn_cast<Instruction>(O);
       if (OpIns) {
         if (Dis.find(OpIns) != Dis.end())
           continue;
@@ -430,10 +435,8 @@ void symllvm::Symllvm::printAST(
   }
 };
 
-z3::expr *
-symllvm::Symllvm::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
-                           llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,
-                           int OverrideBitWidth) {
+z3::expr *symllvm::Symllvm::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
+                                     int OverrideBitWidth) {
   if (ConstantInt *CV = dyn_cast<ConstantInt>(V)) {
     int BitWidth = 0;
     if (OverrideBitWidth) {
@@ -451,7 +454,7 @@ symllvm::Symllvm::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
       Z3Val = new z3::expr(ConstExpr);
     }
 
-    ValueMap[V] = Z3Val;
+    ValueMap[V] = Z3Entry(Z3Val);
 
     return Z3Val;
   }
@@ -462,7 +465,7 @@ symllvm::Symllvm::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
     report_fatal_error("[getZ3Val] Value not found!");
   }
 
-  return ValueMap[V];
+  return ValueMap[V].Exp;
 }
 
 z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
@@ -470,8 +473,11 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
     llvm::SmallVectorImpl<llvm::Value *> &Variables,
     std::map<std::string, z3::expr *> &VarMap, int OverrideBitWidth,
     bool &Error) {
-  llvm::DenseMap<llvm::Value *, z3::expr *> ValueMAP;
-  llvm::DenseMap<z3::expr *, unsigned int> BitMap;
+  // llvm::DenseMap<llvm::Value *, Z3Entry> ValueMap;
+  // llvm::DenseMap<z3::expr *, unsigned int> BitMap;
+
+  ValueMap.clear();
+  BitMap.clear();
 
   Error = false;
 
@@ -491,9 +497,9 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
 
     auto VExpr = Z3Ctx.bv_const(VarStr.c_str(), BitWidth);
 
-    ValueMAP[V] = new z3::expr(VExpr);
-    VarMap[VarStr] = ValueMAP[V];
-    BitMap[ValueMAP[V]] = BitWidth;
+    ValueMap[V] = new z3::expr(VExpr);
+    VarMap[VarStr] = ValueMap[V].Exp;
+    BitMap[ValueMap[V].Exp] = BitWidth;
 
     Var++;
   }
@@ -514,64 +520,58 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
     if (BO) {
       switch (BO->getOpcode()) {
       case Instruction::BinaryOps::Add: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) +
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp = *getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth) +
+                   *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth);
+        Z3Entry e;
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::Sub: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) -
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp = *getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth) -
+                   *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth);
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::Mul: {
-        auto a = getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth);
-        auto exp = *a * *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP,
-                                  OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
+        auto a = getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth);
+        auto exp = *a * *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth);
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::SDiv: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) /
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp = *getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth) /
+                   *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth);
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::Xor: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) ^
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp = *getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth) ^
+                   *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth);
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::And: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) &
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp = *getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth) &
+                   *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth);
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::Or: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) |
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp = *getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth) |
+                   *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth);
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::Shl: {
-        auto exp = z3::shl(
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp =
+            z3::shl(*getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth),
+                    *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth));
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::LShr: {
-        auto exp = z3::lshr(
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp =
+            z3::lshr(*getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth),
+                     *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth));
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       case Instruction::BinaryOps::AShr: {
-        auto exp = z3::ashr(
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-        ValueMAP[BO] = new z3::expr(exp);
+        auto exp =
+            z3::ashr(*getZ3Val(Z3Ctx, BO->getOperand(0), OverrideBitWidth),
+                     *getZ3Val(Z3Ctx, BO->getOperand(1), OverrideBitWidth));
+        ValueMap[BO] = Z3Entry(new z3::expr(exp));
       } break;
       default: {
         BO->print(outs());
@@ -580,19 +580,20 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
       }
       }
 
-      BitMap[ValueMAP[BO]] = BO->getType()->getIntegerBitWidth();
+      BitMap[ValueMap[BO].Exp] = BO->getType()->getIntegerBitWidth();
 
     } else if (auto Trunc = dyn_cast<llvm::TruncInst>(CurInst)) {
       //  Trunc
-      auto exp =
-          getZ3Val(Z3Ctx, Trunc->getOperand(0), ValueMAP, OverrideBitWidth)
-              ->extract(Trunc->getType()->getIntegerBitWidth() - 1, 0);
+      auto exp = getZ3Val(Z3Ctx, Trunc->getOperand(0), OverrideBitWidth)
+                     ->extract(Trunc->getType()->getIntegerBitWidth() - 1, 0);
 
-      ValueMAP[Trunc] = new z3::expr(exp);
-      BitMap[ValueMAP[Trunc]] = BitMap[ValueMAP[Trunc->getOperand(0)]];
+      ValueMap[Trunc] = new z3::expr(exp);
+      BitMap[ValueMap[Trunc].Exp] = BitMap[ValueMap[Trunc->getOperand(0)].Exp];
     } else if (auto ZExt = dyn_cast<ZExtInst>(CurInst)) {
       // ZExt
-      auto V = getZ3Val(Z3Ctx, ZExt->getOperand(0), ValueMAP, OverrideBitWidth);
+      auto V = getZ3Val(Z3Ctx, ZExt->getOperand(0), OverrideBitWidth);
+
+      outs() << V->to_string() << "\n";
 
       // Convert bool to bv if needed
       if (V->get_sort().is_bool()) {
@@ -602,11 +603,11 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
       auto exp = z3::zext(
           *V, ZExt->getType()->getIntegerBitWidth() -
                   ZExt->getOperand(0)->getType()->getIntegerBitWidth());
-      ValueMAP[ZExt] = new z3::expr(exp);
-      BitMap[ValueMAP[ZExt]] = BitMap[ValueMAP[ZExt->getOperand(0)]];
+      ValueMap[ZExt] = new z3::expr(exp);
+      BitMap[ValueMap[ZExt].Exp] = BitMap[ValueMap[ZExt->getOperand(0)].Exp];
     } else if (auto SExt = dyn_cast<SExtInst>(CurInst)) {
       // SExt
-      auto V = getZ3Val(Z3Ctx, SExt->getOperand(0), ValueMAP, OverrideBitWidth);
+      auto V = getZ3Val(Z3Ctx, SExt->getOperand(0), OverrideBitWidth);
 
       // Convert bool to bv if needed
       if (V->get_sort().is_bool()) {
@@ -617,129 +618,160 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
           *V, SExt->getType()->getIntegerBitWidth() -
                   SExt->getOperand(0)->getType()->getIntegerBitWidth());
 
-      ValueMAP[SExt] = new z3::expr(exp);
-      BitMap[ValueMAP[SExt]] = BitMap[ValueMAP[SExt->getOperand(0)]];
+      ValueMap[SExt] = new z3::expr(exp);
+      BitMap[ValueMap[SExt].Exp] = BitMap[ValueMap[SExt->getOperand(0)].Exp];
     } else if (auto GEP = dyn_cast<GetElementPtrInst>(CurInst)) {
       // GEP
-      // Check if RAM
-      if (GEP->getPointerOperand()->getName() != "RAM") {
-        GEP->dump();
-        outs() << "[SYMLLVM E] GEP not based on RAM!\n";
-        Error = true;
-        return z3::expr(Z3Ctx);
+      auto Mem = GEP->getOperand(0);
+      auto Index = GEP->getOperand(1);
+
+      // Must be a array sort
+      auto &Array = ValueMap[Mem];
+
+      if (!Array.Exp->get_sort().is_array()) {
+        report_fatal_error("Array is not an array sort!");
       }
 
-      auto Index = GEP->getOperand(2);
-      if (isa<ConstantInt>(Index)) {
-        // Concrete
-        report_fatal_error("[GEP] Implement me!", false);
-      } else {
-        // Symbolic
-        // Todo: Just assign value for now
-        ValueMAP[GEP] = ValueMAP[Index];
-        BitMap[ValueMAP[GEP]] = BitMap[ValueMAP[Index]];
-      }
+      // Check if ConstantInt
+      auto IndexExpr = getZ3Val(Z3Ctx, Index, 32);
+
+      // Store the GEP
+      ValueMap[GEP] = Z3Entry(Array.Exp, true, IndexExpr);
+      BitMap[ValueMap[GEP].Exp] = 8;
     } else if (auto Load = dyn_cast<LoadInst>(CurInst)) {
       // Load
-      // Todo: Use Memory Manager to get concrete values
-      auto PtrValue = ValueMAP[Load->getOperand(0)];
+      auto &PtrValue = ValueMap[Load->getOperand(0)];
 
       // Check if bitwidth matches
       int NewValueBitWidth = 0;
-      auto CurValueBitWidth = BitMap[PtrValue];
+      auto CurValueBitWidth = BitMap[PtrValue.Exp];
       if (Load->getType()->isPointerTy()) {
         NewValueBitWidth = CurValueBitWidth;
       } else {
         NewValueBitWidth = Load->getType()->getIntegerBitWidth();
       }
 
-      if (CurValueBitWidth == NewValueBitWidth) {
-        // Just Map
-        ValueMAP[Load] = ValueMAP[Load->getPointerOperand()];
-        BitMap[ValueMAP[Load]] = BitMap[ValueMAP[Load->getPointerOperand()]];
-      } else if (CurValueBitWidth > NewValueBitWidth) {
-        // Apply Trunc
-        auto exp =
-            PtrValue->extract(Load->getType()->getIntegerBitWidth() - 1, 0);
+      // Check if GEP
+      if (PtrValue.isGEP) {
+        auto Value = loadValueLittleEndian(PtrValue.Exp, PtrValue.Index,
+                                           NewValueBitWidth);
 
-        ValueMAP[Load] = new z3::expr(exp);
-        BitMap[ValueMAP[Load]] = NewValueBitWidth;
+        // Store Value
+        ValueMap[Load] = Value;
+        BitMap[ValueMap[Load].Exp] = NewValueBitWidth;
       } else {
-        // Might happen when we are missing the Ptr Value in the AST
-        Error = true;
-        Load->dump();
-        Load->getPointerOperand()->dump();
-        report_fatal_error("[Load] Implement me!", false);
+        if (CurValueBitWidth == NewValueBitWidth) {
+          // Just Map
+          ValueMap[Load] = ValueMap[Load->getPointerOperand()];
+          BitMap[ValueMap[Load].Exp] =
+              BitMap[ValueMap[Load->getPointerOperand()].Exp];
+        } else if (CurValueBitWidth > NewValueBitWidth) {
+          // Apply Trunc
+          auto exp = PtrValue.Exp->extract(
+              Load->getType()->getIntegerBitWidth() - 1, 0);
+
+          ValueMap[Load] = new z3::expr(exp);
+          BitMap[ValueMap[Load].Exp] = NewValueBitWidth;
+        } else {
+          // Apply Zext
+          auto exp =
+              z3::zext(*PtrValue.Exp, NewValueBitWidth - CurValueBitWidth);
+
+          ValueMap[Load] = new z3::expr(exp);
+          BitMap[ValueMap[Load].Exp] = NewValueBitWidth;
+        }
       }
     } else if (auto Store = dyn_cast<StoreInst>(CurInst)) {
       // Store
       // Check if bitwidth is the same
-      auto CurValue = ValueMAP[Store->getOperand(1)];
+      auto PtrValue = ValueMap[Store->getOperand(1)];
       auto NewValue = Store->getOperand(0);
 
       int NewValueBitWidth = 0;
-      auto CurValueBitWidth = BitMap[CurValue];
+      auto CurValueBitWidth = BitMap[PtrValue.Exp];
       if (NewValue->getType()->isPointerTy()) {
         NewValueBitWidth = CurValueBitWidth;
       } else {
         NewValueBitWidth = NewValue->getType()->getIntegerBitWidth();
       }
 
-      // Check if same bitwidth
-      if (CurValueBitWidth == NewValueBitWidth) {
-        auto V = *getZ3Val(Z3Ctx, NewValue, ValueMAP, OverrideBitWidth);
-
-        // Overwrite current value with new value
-        V = (*CurValue & 0) | V;
+      if (PtrValue.isGEP) {
+        auto V = getZ3Val(Z3Ctx, NewValue, OverrideBitWidth);
+        auto NewV = storeValueLittleEndian(PtrValue.Exp, PtrValue.Index, V);
 
         // Update CurValue
-        ValueMAP[Store->getOperand(1)] = new z3::expr(V);
-        BitMap[ValueMAP[Store->getOperand(1)]] = CurValueBitWidth;
+        ValueMap[Store->getOperand(1)] = NewV;
+        BitMap[ValueMap[Store->getOperand(1)].Exp] = 8;
+
+        CurrentMemoryState[PtrValue.Exp] = ValueMap[Store->getOperand(1)].Exp;
       } else {
-        // Need to apply some boolean magic
-        if (CurValueBitWidth > NewValueBitWidth) {
-          // Create high bits bitmask with all ones
-          uint64_t BitMask = -1;
-          switch (NewValueBitWidth) {
-          case 32: {
-            BitMask = BitMask - (uint32_t)-1;
-            break;
-          }
-          case 16: {
-            BitMask = BitMask - (uint16_t)-1;
-            break;
-          }
-          case 8: {
-            BitMask = BitMask - (uint8_t)-1;
-            break;
-          }
-          case 1: {
-            BitMask = BitMask - 1;
-            break;
-          }
-          default:
-            report_fatal_error("[Store] Implement me!", false);
-          }
+        // Check if same bitwidth
+        if (CurValueBitWidth == NewValueBitWidth) {
+          auto V = *getZ3Val(Z3Ctx, NewValue, OverrideBitWidth);
+          auto VZ3Entry = ValueMap[NewValue];
 
-          // Zext V to Destination Type
-          auto V = *getZ3Val(Z3Ctx, NewValue, ValueMAP, NewValueBitWidth);
-          auto VZext = z3::zext(V, CurValueBitWidth - NewValueBitWidth);
+          // Check if array
+          if (V.get_sort().is_array()) {
+            // Apply Store
+            // V = z3::store(*CurValue.Exp, *CurValue.Index, V);
 
-          V = *CurValue & Z3Ctx.bv_val(BitMask, CurValueBitWidth) | VZext;
+            // Update CurValue
+            ValueMap[Store->getOperand(1)] = VZ3Entry;
+            BitMap[ValueMap[Store->getOperand(1)].Exp] = CurValueBitWidth;
+          } else {
+            // Overwrite current value with new value
+            V = (*PtrValue.Exp & 0) | V;
 
-          // Update CurValue
-          ValueMAP[Store->getOperand(1)] = new z3::expr(V);
-          BitMap[ValueMAP[Store->getOperand(1)]] = CurValueBitWidth;
+            // Update CurValue
+            ValueMap[Store->getOperand(1)] = new z3::expr(V);
+            BitMap[ValueMap[Store->getOperand(1)].Exp] = CurValueBitWidth;
+          }
         } else {
-          // Todo
-          Store->getOperand(1)->dump();
-          report_fatal_error("[Store] Implement me 2!", false);
+          // Need to apply some boolean magic
+          if (CurValueBitWidth > NewValueBitWidth) {
+            // Create high bits bitmask with all ones
+            uint64_t BitMask = -1;
+            switch (NewValueBitWidth) {
+            case 32: {
+              BitMask = BitMask - (uint32_t)-1;
+              break;
+            }
+            case 16: {
+              BitMask = BitMask - (uint16_t)-1;
+              break;
+            }
+            case 8: {
+              BitMask = BitMask - (uint8_t)-1;
+              break;
+            }
+            case 1: {
+              BitMask = BitMask - 1;
+              break;
+            }
+            default:
+              report_fatal_error("[Store] Implement me!", false);
+            }
+
+            // Zext V to Destination Type
+            auto V = *getZ3Val(Z3Ctx, NewValue, NewValueBitWidth);
+            auto VZext = z3::zext(V, CurValueBitWidth - NewValueBitWidth);
+
+            V = *PtrValue.Exp & Z3Ctx.bv_val(BitMask, CurValueBitWidth) | VZext;
+
+            // Update CurValue
+            ValueMap[Store->getOperand(1)] = new z3::expr(V);
+            BitMap[ValueMap[Store->getOperand(1)].Exp] = CurValueBitWidth;
+          } else {
+            // Todo
+            Store->getOperand(1)->dump();
+            report_fatal_error("[Store] Implement me 2!", false);
+          }
         }
       }
     } else if (auto ICmp = dyn_cast<ICmpInst>(CurInst)) {
       // ICmp
-      auto V0 = getZ3Val(Z3Ctx, ICmp->getOperand(0), ValueMAP, false);
-      auto V1 = getZ3Val(Z3Ctx, ICmp->getOperand(1), ValueMAP, false);
+      auto V0 = getZ3Val(Z3Ctx, ICmp->getOperand(0), false);
+      auto V1 = getZ3Val(Z3Ctx, ICmp->getOperand(1), false);
 
       z3::expr *Res = nullptr;
       switch (ICmp->getPredicate()) {
@@ -777,13 +809,13 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
         report_fatal_error("Unsupported Predicate!", false);
       }
 
-      ValueMAP[ICmp] = Res;
-      BitMap[ValueMAP[ICmp]] = ICmp->getType()->getIntegerBitWidth();
+      ValueMap[ICmp] = Res;
+      BitMap[ValueMap[ICmp].Exp] = ICmp->getType()->getIntegerBitWidth();
     } else if (auto Select = dyn_cast<SelectInst>(CurInst)) {
       // Select
-      auto Cond = getZ3Val(Z3Ctx, Select->getCondition(), ValueMAP, false);
-      auto VTrue = getZ3Val(Z3Ctx, Select->getTrueValue(), ValueMAP, false);
-      auto VFalse = getZ3Val(Z3Ctx, Select->getFalseValue(), ValueMAP, false);
+      auto Cond = getZ3Val(Z3Ctx, Select->getCondition(), false);
+      auto VTrue = getZ3Val(Z3Ctx, Select->getTrueValue(), false);
+      auto VFalse = getZ3Val(Z3Ctx, Select->getFalseValue(), false);
 
       // Get BitWidth
       int VTrueBitWidth =
@@ -808,28 +840,33 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
 
       auto Res = z3::ite(*Cond, *VTrue, *VFalse);
 
-      ValueMAP[Select] = new z3::expr(Res);
-      BitMap[ValueMAP[Select]] = Select->getType()->getIntegerBitWidth();
+      ValueMap[Select] = new z3::expr(Res);
+      BitMap[ValueMap[Select].Exp] = Select->getType()->getIntegerBitWidth();
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
       // Must be an intrinsic
-      handleIntrinsic(Call, ValueMAP, BitMap);
+      handleIntrinsic(Call);
     } else if (auto Ret = dyn_cast<ReturnInst>(CurInst)) {
-      ValueMAP[Ret] = getZ3Val(Z3Ctx, Ret->getReturnValue(), ValueMAP, 0);
+      ValueMap[Ret] = getZ3Val(Z3Ctx, Ret->getReturnValue(), 0);
     } else if (auto Alloca = dyn_cast<AllocaInst>(CurInst)) {
       // Alloca
-      ValueMAP[CurInst] = new z3::expr(Z3Ctx.bv_const("Alloca", 32));
-      BitMap[ValueMAP[CurInst]] = 32;
+      ValueMap[CurInst] = new z3::expr(Z3Ctx.bv_const("Alloca", 32));
+      BitMap[ValueMap[CurInst].Exp] = 32;
+    } else if (auto BitCast = dyn_cast<BitCastInst>(CurInst)) {
+      // BitCast
+      ValueMap[CurInst] = getZ3Val(Z3Ctx, BitCast->getOperand(0),
+                                   CurInst->getType()->getIntegerBitWidth());
+      BitMap[ValueMap[CurInst].Exp] = CurInst->getType()->getIntegerBitWidth();
     } else {
       CurInst->dump();
       report_fatal_error("[getZ3ExpressionFromAST] Unsupported instruction!");
     }
 
     if (Debug) {
-      outs() << "Bit: " << BitMap[ValueMAP[CurInst]] << "\n";
+      outs() << "Bit: " << BitMap[ValueMap[CurInst].Exp] << "\n";
     }
 
     // Set last inst
-    LastInst = ValueMAP[CurInst];
+    LastInst = ValueMap[CurInst].Exp;
   }
 
   // Map LastInst to Output
@@ -841,7 +878,7 @@ z3::expr symllvm::Symllvm::getZ3ExpressionFromAST(
 
   // Clean up
   /*
-  for (auto V : ValueMAP) {
+  for (auto V : ValueMap) {
     // Skip Vars
     bool Found = false;
     for (auto &E : VarMap) {
@@ -865,8 +902,8 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
                                    llvm::SmallVectorImpl<uint64_t> &Results) {
 
   // Test
-  solveEdges(F, 1000, I->getParent(), I, 32, Results);
-  return !Results.empty();
+  // solveEdges(F, 1000, I->getParent(), I, 32, Results);
+  // return !Results.empty();
 
   // Create DT
   DominatorTree DT(*F);
@@ -876,7 +913,19 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
 
   // Get the AST
   SmallVector<llvm::Instruction *, 32> AST;
-  this->getAST(&DT, I, AST, Variables, true);
+
+  // Get AST and Variables
+  // this->getAST(&DT, I, AST, Variables, true);
+
+  // Use the whole BB
+  auto BB = I->getParent();
+  for (auto I = BB->begin(); I != BB->end(); I++) {
+    AST.push_back(&*I);
+  }
+
+  for (auto &p : F->args()) {
+    Variables.push_back(&p);
+  }
 
   if (AST.empty()) {
     return false;
@@ -918,9 +967,9 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
             z3::tactic(Z3Ctx, "smt"));
   auto s = t.mk_solver();
 
-  // Convert bool to bitvecror
+  // Convert bool to bitvector
   if (Z3Expr.is_bool()) {
-    Z3Expr = z3::ite(Z3Expr, Z3Ctx.bv_val(1, 32), Z3Ctx.bv_val(0, 32));
+    Z3Expr = boolToBV(Z3Expr, 32);
   }
 
   z3::check_result IsSat;
@@ -931,9 +980,11 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
     // Check if always zero
     z3::expr VResult = Z3Ctx.bv_const("Result", BitWidth);
 
-    outs() << Z3Expr.to_string() << " " << Z3Expr.is_bool() << " "
-           << Z3Expr.is_bv() << " " << Z3Expr.get_sort().to_string() << "\n";
-
+    /*
+        outs() << Z3Expr.to_string() << " " << Z3Expr.is_bool() << " "
+               << Z3Expr.is_bv() << " " << Z3Expr.get_sort().to_string() <<
+       "\n";
+    */
     auto expr = ((Z3Expr - VResult) == 0);
 
     // Add old results to find new ones
@@ -1007,15 +1058,38 @@ bool symllvm::Symllvm::solveValues(llvm::Function *F, llvm::Instruction *I,
   return true;
 }
 
-void symllvm::Symllvm::handleIntrinsic(
-    llvm::CallInst *I, llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMAP,
-    llvm::DenseMap<z3::expr *, unsigned int> &BitMap) {
+void symllvm::Symllvm::handleIntrinsic(llvm::CallInst *I) {
+  if (!I->getCalledFunction()->isIntrinsic()) {
+    // Must be calloc/malloc
+    auto CF = I->getCalledFunction();
+    if (CF->getName() == "calloc") {
+      // Create a new array
+      auto isort = Z3Ctx.bv_sort(32);
+      auto value = Z3Ctx.bv_val(0, 8);
+      auto exp = to_expr(Z3Ctx, Z3_mk_const_array(Z3Ctx, isort, value));
+
+      ValueMap[I] = new z3::expr(exp);
+      CurrentMemoryState[ValueMap[I].Exp] = ValueMap[I].Exp;
+    } else if (CF->getName() == "malloc") {
+      // Create a new array
+      auto isort = Z3Ctx.bv_sort(32);
+      auto value = Z3Ctx.bv_val(0, 8);
+      auto exp = to_expr(Z3Ctx, Z3_mk_const_array(Z3Ctx, isort, value));
+
+      // Todo: Dont create a const array with 0
+
+      ValueMap[I] = new z3::expr(exp);
+      CurrentMemoryState[ValueMap[I].Exp] = ValueMap[I].Exp;
+    }
+    return;
+  }
+
   if (I->getCalledFunction()->getIntrinsicID() == Intrinsic::ctpop) {
     // ctpop
     // Based on:
     // https://book-of-gehn.github.io/articles/2021/05/17/Verifying-Some-Bithacks.html
 
-    auto v = getZ3Val(this->Z3Ctx, I->getOperand(0), ValueMAP, 0);
+    auto v = getZ3Val(this->Z3Ctx, I->getOperand(0), 0);
 
     // This works for 1 - 64 bit
     int BitWidth = I->getType()->getIntegerBitWidth();
@@ -1030,15 +1104,15 @@ void symllvm::Symllvm::handleIntrinsic(
     *v = (*v + z3::lshr(*v, 4)) & UL255a;           // temp
     auto c = z3::lshr((*v * UL255b), BitWidth - 8); // count
 
-    ValueMAP[I] = new z3::expr(c);
-    BitMap[ValueMAP[I]] = I->getType()->getIntegerBitWidth();
+    ValueMap[I] = new z3::expr(c);
+    BitMap[ValueMap[I].Exp] = I->getType()->getIntegerBitWidth();
   } else if (I->getCalledFunction()->getIntrinsicID() == Intrinsic::fshl) {
     // fshl
     int BitWidth = I->getType()->getIntegerBitWidth();
 
-    auto op1 = getZ3Val(this->Z3Ctx, I->getOperand(0), ValueMAP, 0);
-    auto op2 = getZ3Val(this->Z3Ctx, I->getOperand(1), ValueMAP, 0);
-    auto op3 = getZ3Val(this->Z3Ctx, I->getOperand(2), ValueMAP, 0);
+    auto op1 = getZ3Val(this->Z3Ctx, I->getOperand(0), 0);
+    auto op2 = getZ3Val(this->Z3Ctx, I->getOperand(1), 0);
+    auto op3 = getZ3Val(this->Z3Ctx, I->getOperand(2), 0);
 
     // Concat [op1, op2]
     auto Concat = z3::concat(*op1, *op2);
@@ -1052,12 +1126,126 @@ void symllvm::Symllvm::handleIntrinsic(
     // Extract upper part
     auto Res = Shift.extract((BitWidth * 2 - 1), BitWidth);
 
-    ValueMAP[I] = new z3::expr(Res);
-    BitMap[ValueMAP[I]] = I->getType()->getIntegerBitWidth();
+    ValueMap[I] = new z3::expr(Res);
+    BitMap[ValueMap[I].Exp] = I->getType()->getIntegerBitWidth();
   } else {
     I->dump();
     report_fatal_error("[handleIntrinsic] Implement me!", false);
   }
+}
+
+void symllvm::Symllvm::updateMemoryState(z3::expr *Memory,
+                                         z3::expr *CurrentState) {
+  CurrentMemoryState[Memory] = CurrentState;
+}
+
+z3::expr *symllvm::Symllvm::getMemoryState(z3::expr *Memory) {
+  return CurrentMemoryState[Memory];
+}
+
+z3::expr *symllvm::Symllvm::storeValueLittleEndian(z3::expr *Memory,
+                                                   z3::expr *Index,
+                                                   z3::expr *Value) {
+  // Get Current Memory
+  auto CurrentMemory = CurrentMemoryState[Memory];
+
+  // Loop over V extract the bytes and store them in little endian
+  z3::expr NewV = *CurrentMemory;
+  for (int i = 0; i < Value->get_sort().bv_size() / 8; i++) {
+    auto Byte = Value->extract((i + 1) * 8 - 1, i * 8);
+    NewV = z3::store(NewV, *Index + i, Byte);
+  }
+
+  // Update CurValue
+  CurrentMemoryState[Memory] = new z3::expr(NewV);
+
+  return CurrentMemoryState[Memory];
+}
+
+z3::expr *symllvm::Symllvm::storeValueLittleEndian(z3::expr *Memory,
+                                                   z3::expr *Index,
+                                                   llvm::Value *Value) {
+  // Get Current Memory
+  auto CurrentMemory = CurrentMemoryState[Memory];
+
+  // Get Value
+  auto V = getZ3Val(Z3Ctx, Value, 0);
+
+  // Loop over V extract the bytes and store them in little endian
+  z3::expr NewV = *CurrentMemory;
+
+  int LastIndex = V->get_sort().bv_size() / 8;
+  for (int i = 0; i < LastIndex; i++) {
+    auto Byte = V->extract((i + 1) * 8 - 1, i * 8);
+    NewV = z3::store(NewV, *Index + LastIndex - i, Byte);
+  }
+
+  // Update CurValue
+  CurrentMemoryState[Memory] = new z3::expr(NewV);
+
+  return CurrentMemoryState[Memory];
+}
+
+z3::expr *symllvm::Symllvm::loadValueLittleEndian(z3::expr *Memory,
+                                                  z3::expr *Index,
+                                                  int BitWidth) {
+  // Get Current Memory
+  auto CurrentMemory = CurrentMemoryState[Memory];
+
+  z3::expr Value = getConstant(0, BitWidth);
+  for (int i = 0; i < BitWidth / 8; i++) {
+    auto Byte = z3::select(*CurrentMemory, *Index + i);
+
+    if (BitWidth != 8) {
+      int Count = (i * 8);
+      Byte = z3::zext(Byte, BitWidth - 8);
+      Byte = z3::shl(Byte, Count);
+    }
+
+    Value = Value | Byte;
+  }
+
+  return new z3::expr(Value);
+}
+
+z3::expr *symllvm::Symllvm::loadValueBigEndian(z3::expr *Memory,
+                                               z3::expr *Index, int BitWidth) {
+  // Get Current Memory
+  auto CurrentMemory = CurrentMemoryState[Memory];
+
+  z3::expr Value = getConstant(0, BitWidth);
+  for (int i = 0; i < BitWidth / 8; i++) {
+    auto Byte = z3::select(*CurrentMemory, *Index + i);
+
+    if (BitWidth != 8) {
+      int Count = BitWidth - 8 - (i * 8);
+      Byte = z3::zext(Byte, BitWidth - 8);
+      Byte = z3::shl(Byte, Count);
+    }
+
+    Value = Value | Byte;
+  }
+
+  return new z3::expr(Value);
+}
+
+z3::expr *symllvm::Symllvm::storeValueBigEndian(z3::expr *Memory,
+                                                z3::expr *Index,
+                                                z3::expr *Value) {
+  // Get Current Memory
+  auto CurrentMemory = CurrentMemoryState[Memory];
+
+  // Loop over V extract the bytes and store them in big endian order
+  z3::expr NewV = *CurrentMemory;
+  for (int i = 0; i < Value->get_sort().bv_size() / 8; i++) {
+    auto Byte = Value->extract((i + 1) * 8 - 1, i * 8);
+    NewV = z3::store(NewV, *Index + i, Byte);
+  }
+
+  // Update CurValue
+  CurrentMemoryState[Memory] = new z3::expr(NewV);
+
+  return CurrentMemoryState[Memory];
 }
 
 z3::expr symllvm::Symllvm::getConstant(uint64_t Value, int BitWidth) {

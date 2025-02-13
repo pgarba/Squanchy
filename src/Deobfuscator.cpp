@@ -596,7 +596,7 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   optimizeFunctionWithCustomPipeline(F);
   optimizeFunction(F);
 
-  // 9. Proof BasicBlocks
+  // InProgress: 9. Proof BasicBlocks
   sliceBasicBlock(F);
 
   // 10. Replace Callocs
@@ -972,14 +972,15 @@ void Deobfuscator::sliceBasicBlock(llvm::Function *F) {
     SmallVector<uint64_t, 2> Values;
 
     symllvm::Symllvm S;
-    S.setDebug(true);
+    // S.setDebug(true);
 
     if (auto BR = dyn_cast<BranchInst>(&BB->back())) {
       if (BR->isUnconditional()) {
         continue;
       }
 
-      auto Solved = S.solveValues(F, dyn_cast<Instruction>(BR->getCondition()), Values);
+      auto Solved =
+          S.solveValues(F, dyn_cast<Instruction>(BR->getCondition()), Values);
       if (!Solved) {
         continue;
       }
@@ -1002,8 +1003,17 @@ void Deobfuscator::sliceBasicBlock(llvm::Function *F) {
         }
 
         if (!Found) {
-          // outs() << "SwitchCase: Not found: " << Case.getCaseValue()->getSExtValue() << "\n";
+          // outs() << "SwitchCase: Not found: " <<
+          // Case.getCaseValue()->getSExtValue() << "\n";
         }
+      }
+    } else if (auto RI = dyn_cast<ReturnInst>(&BB->back())) {
+      if (auto RV = RI->getReturnValue()) {
+        if (isa<ConstantInt>(RV)) {
+          continue;
+        }
+
+        S.solveValues(F, dyn_cast<Instruction>(RI->getReturnValue()), Values);
       }
 
     } else {

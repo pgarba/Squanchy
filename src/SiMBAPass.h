@@ -1,7 +1,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/PassManager.h>
 
-typedef struct {
+typedef struct OptimizationGuide {
   bool MBAFound = false;
   bool HasOptimized = false;
   int SimbaCallCounter = 0;
