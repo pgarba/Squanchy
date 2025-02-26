@@ -566,8 +566,9 @@ bool Deobfuscator::deobfuscateFunction(llvm::Function *F) {
   }
 
   // 8. Optimize the functions
-  optimizeFunctionWithCustomPipeline(F);
+  optimizeFunctionWithCustomPipeline(F, false);
   optimizeFunction(F);
+  optimizeFunctionWithCustomPipeline(F, true);
 
   // 10. Replace Callocs
   if (ReplaceCallocs) {
